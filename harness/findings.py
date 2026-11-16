@@ -1,5 +1,6 @@
 """Review returns in the existing Tasks registry; no independent workflow DB."""
 import copy
+import hashlib
 import json
 
 
@@ -80,9 +81,20 @@ def resolve(manager, task_id, agent_run_id, issue_id, evidence):
         issue = next(i for i in state["issues"] if i["id"] == issue_id)
         if task["state"] != "IN_REVIEW" or issue.get("assigned_task_id") != task_id or task["role"] != issue["owner"]:
             raise ValueError("resolution requires responsible task's active review")
+        expected_outputs = {a["path"]: a["sha256"] for a in task["outputs"]}
+        for relative, expected_hash in expected_outputs.items():
+            path = (manager.root / relative).resolve()
+            if not path.is_relative_to(manager.root) or not path.is_file():
+                raise ValueError("resolution requires existing current outputs inside the repository")
+            try:
+                current_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as error:
+                raise ValueError("resolution cannot read current output bytes") from error
+            if current_hash != expected_hash:
+                raise ValueError("resolution must test exact current output bytes")
         ref = manager.artifact(evidence)
         report = json.loads((manager.root / ref["snapshot"]).read_text())
-        if report.get("result") != "PASS" or report.get("tested_outputs") != {a["path"]: a["sha256"] for a in task["outputs"]}:
+        if report.get("result") != "PASS" or report.get("tested_outputs") != expected_outputs:
             raise ValueError("resolution must test exact current outputs")
         if issue_id not in report.get("resolved_issues", []) or not report.get("observations"):
             raise ValueError("resolution needs issue-specific observations")
