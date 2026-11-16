@@ -92,12 +92,49 @@ current content. Original request files must remain unchanged; changing them
 stops automatic retest for a user-authority decision. Repairing a specification
 to match an already explicit original policy is distinct from inventing policy.
 
-An issue closes only if it originated in QA for the same target, the model
+Automatic QA issue resolution closes an issue only if it originated in QA for the same target, the model
 explicitly reviewed its ID, all required QA criteria and actual command gates
 passed, native QA review is DONE, and the target manifest is still identical.
 Resolution preserves the issue and records QA execution/review IDs, report proof
 and exact code manifest. A successful QA result without explicit reviewed IDs
 leaves existing issues OPEN.
+
+
+## Responsible owner issue resolution through the installed CLI
+
+An explicitly returned stage issue uses the existing responsible-owner review
+path rather than being silently closed by a repair callback. Prepare an input
+under `docs/guard-inputs/` with actual native IDs:
+
+```json
+{
+  "task_id": "PLAN.R1",
+  "agent_run_id": "<active-responsible-review-run-id>",
+  "issue_id": "<returned-issue-id>",
+  "evidence": "verification/issues/plan-r1-resolution.json"
+}
+```
+
+```sh
+rtk proxy python3 .kmp-agent/agent.py task --run-id RUN --operation resolve-issue --data docs/guard-inputs/resolve-issue.json
+```
+
+This dispatches to the existing `findings.resolve` function. It still requires
+the assigned responsible role and task, an active `review` execution with the
+task `IN_REVIEW`, and a PASS evidence report whose `tested_outputs` exactly
+matches the submitted current output path/hash map. Resolution also rehashes
+each actual output file inside the project; changed, missing or escaped files
+are rejected even if the report still matches the ledger cached hash. The report
+must name the issue in `resolved_issues` and contain nonempty issue observations. Design
+issues additionally require screenshot artifacts. Wrong-role, inactive-review,
+stale-output and missing-evidence attempts are rejected by the same checks.
+
+Issue resolution is separate from stage review approval: return to the owner
+stage, repair and submit, begin its responsible review, resolve each returned
+issue with current evidence, then complete the normal stage review. Existing
+unresolved-issue gates and historical FAIL/DONE evidence remain in place. The
+command does not authorize an agent to edit the protected issue ledger or to
+infer semantic verification from an unexamined report.
 
 
 ## Configured CLI owner path
@@ -125,6 +162,27 @@ and the native run's process admission budget; this is not a token/dollar cap.
 ## Actual image and execution context
 
 QA.configure images/context_files freezes artifacts separately from verbatim original_requests and includes them in source scope. Images use actual Codex exec --image transport with hash metadata; only in-workspace PNG/JPEG/WebP with matching suffix/bytes are accepted. Context changes block before dispatch. Each evidence field must identify exactly one actual relative file, with extra references inside that file. Invalid evidence cannot become PASS even when model prose says pass. Actual model review, execution-evidence review, model-executed commands and synthetic tests remain distinct.
+
+
+### Explicit images from excluded verification output
+
+Explicitly configured images are immutable QA inputs even when their original
+paths are under the `verification/` tree excluded from the ordinary isolated
+source copy. QA materializes only those registered binary images into its
+separate evidence input directory inside the isolated workspace. It compares
+source and copied bytes with the hash frozen by `configure-qa`, and passes the
+actual in-workspace copy paths to the native image transport. The packet/report
+retain `image_materializations` with original `source_path`/`source_sha256` and
+copied `path`/`sha256`. Copies are under `qa-tools/image-inputs/` in the isolated
+workspace; no replacement screenshot is generated.
+
+Missing, changed, outside-root, traversal and symlink image inputs remain
+invalid. Image-format validation, isolated-workspace boundaries and read-only
+product manifest checks remain in effect. Explicit image delivery does not
+copy the entire verification tree or authorize product writes. Successful
+materialization is distinct from an actual independent model seeing the image
+and returning semantic visual QA evidence; synthetic transport regressions are
+not a product visual PASS.
 
 
 ## 기준 대응과 프로젝트별 생성물 설정

@@ -15,7 +15,7 @@
 1. Tasks.configure_stage_workflow(feature_id, stages)로 각 단계의 별도 작업과 필수 검토를 등록한다.
 2. Tasks.bind_stage_inputs(task_id, inputs, reason)으로 현재 검토된 상위 산출물 버전을 명시적으로 연결한다. 이전 입력·검토는 보존한다.
 3. 기존 ready → begin → submit → review 명령을 사용한다. 필수 FAIL/NOT_RUN이면 같은 단계의 READY 보완 작업이 생성된다. 검토 결과에 return_stage와 reason을 명시하면 해당 담당 단계로 반환한다. 자유 문장으로 반환 대상을 추측하지 않는다.
-4. 보완 작업은 .R1 등 새 작업으로 남고 이전 DONE/PASS나 FAIL은 덮지 않는다. 기존 issues 목록·원래 finding 해소 검토를 재사용한다. 미해소 이슈는 다음 보완 작업으로 이어지며 해소에는 현재 출력과 이슈별 관찰이 있는 근거가 필요하다. 디자인 이슈는 기존 정책대로 실제 재렌더 캡처도 필요하다.
+4. 보완 작업은 .R1 등 새 작업으로 남고 이전 DONE/PASS나 FAIL은 덮지 않는다. 기존 issues 목록·원래 finding 해소 검토를 재사용한다. 미해소 이슈는 다음 보완 작업으로 이어지며 해소에는 현재 출력과 이슈별 관찰이 있는 근거가 필요하다. 디자인 이슈는 기존 정책대로 실제 재렌더 캡처도 필요하다. 설치본에서는 담당 작업의 활성 review 중 공식 `task --operation resolve-issue --data docs/guard-inputs/resolve-issue.json`을 사용한다. 데이터와 현재 출력 해시·이슈별 근거·필수 캡처 검사는 [담당 이슈 해소 절차](qa.md#responsible-owner-issue-resolution-through-the-installed-cli)를 따른다. 해소 뒤 별도의 정상 단계 검토를 통과해야 하며 원장 직접 편집으로 대체하지 않는다.
 5. 수정 후 해당 단계 검토와 영향받은 후속 단계 검토를 다시 수행한다. 입력·출력·근거 해시, 검토 계약 해시와 승인 당시 상위 버전 연결이 모두 유효해야 PASS이다. 과거 계약 해시가 없는 PASS는 재검토 필요다.
 6. 세 단계가 각각 유효하고 현재 승인 입력을 적용한 뒤에만 PRODUCT code_implementation ready/begin을 허용한다. 등록 계약 없는 신규 제품 구현도 차단한다. 단순 문서·설정·보고서 작업에 제품 코드 검증을 일괄 적용하지 않는다.
 7. 원래 max_attempts를 보완 작업 전체에 합산한다. 한도 도달 시 BLOCKED_RETRY_LIMIT로 멈추며 사용자에게 추가 예산·범위 판단을 요청한다. 목표·정책·합의 변경 승인을 자동 발급하지 않는다.

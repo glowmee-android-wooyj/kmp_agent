@@ -115,6 +115,47 @@ def scoped_manifest(root,scope,generated_paths=()):
     return {p:sha for p,sha in content.items() if any(p==base or p.startswith(base+'/') for base in paths)}
 
 
+def _image_source(root,value):
+    """Explicit images must not acquire authority through path normalization."""
+    if not isinstance(value,(str,Path)):raise ValueError('QA image path must be explicit')
+    root=Path(root).resolve();relative=Path(value)
+    if relative.is_absolute() or '..' in relative.parts:
+        raise ValueError('QA image path must be relative and stay inside project')
+    for index in range(1,len(relative.parts)+1):
+        if root.joinpath(*relative.parts[:index]).is_symlink():
+            raise ValueError('QA images must not use symlinks')
+    image=(root/relative).resolve()
+    if not image.is_relative_to(root) or not image.is_file():
+        raise ValueError('QA image must exist inside project')
+    return image
+
+
+def _images_unchanged(root,refs):
+    try:return all(hashlib.sha256(_image_source(root,r['path']).read_bytes()).hexdigest()==r['sha256'] for r in refs)
+    except (OSError,ValueError):return False
+
+
+def _materialize_images(root,workspace,refs):
+    """Deliver frozen raw image bytes even when their source tree is excluded."""
+    if not refs:return []
+    bundle=workspace/'qa-tools/image-inputs'
+    if (workspace/'qa-tools').is_symlink() or not bundle.resolve().is_relative_to(workspace):
+        raise ValueError('QA image destination must stay inside isolated workspace')
+    bundle.mkdir(parents=True)
+    materializations=[]
+    for index,ref in enumerate(refs):
+        source=_image_source(root,ref['path']);raw=source.read_bytes()
+        if hashlib.sha256(raw).hexdigest()!=ref['sha256']:
+            raise ValueError('missing or changed frozen QA image')
+        dest=bundle/(str(index)+'-'+ref['sha256']+source.suffix.lower())
+        with dest.open('xb') as handle:handle.write(raw)
+        checksum=hashlib.sha256(dest.read_bytes()).hexdigest()
+        if checksum!=ref['sha256']:raise ValueError('QA image copy differs from registered hash')
+        materializations.append({'source_path':ref['path'],'source_sha256':ref['sha256'],
+                                 'path':str(dest.relative_to(workspace)),'sha256':checksum})
+    return materializations
+
+
 def finding_return_stage(finding,workflow,target_task_id):
     """Only explicit stage ownership may invalidate a development-plan review."""
     if not finding.get('blocking') or finding.get('kind')=='improvement':return None
@@ -141,6 +182,7 @@ class QA:
                 raise ValueError('agent-derived document cannot be original or approved QA authority')
             context_files=list(dict.fromkeys((context_files or [])+[NAME]+[s['path'] for s in lineage['sources']]))
         refs=[self.tasks.artifact(p) for p in original_requests]
+        for path in images or []:_image_source(self.root,path)
         image_refs=[self.tasks.artifact(p) for p in (images or [])]
         context_refs=[self.tasks.artifact(p) for p in (context_files or [])]
         inputs=list(dict.fromkeys([r['path'] for r in refs+target['inputs']+target['outputs']+image_refs+context_refs]))
@@ -246,6 +288,8 @@ class QA:
         if scoped_manifest(self.root,config.get('manifest_scope',{'mode':'UNKNOWN'}),config.get('generated_paths',[]))!=config['target_manifest']:raise ValueError('target changed since QA configuration; configure a new retest task')
         generated=self._generated(config,task)
         from harness.delegation_runtime import validate_images
+        if not _images_unchanged(self.root,config.get('images',[])):
+            raise ValueError('missing or changed frozen QA image')
         validate_images(self.root,[r['path'] for r in config.get('images',[])])
         for ref in config['original_requests']+task['inputs']:
             if not self.tasks._valid_artifact(ref):raise ValueError('missing or changed frozen QA input')
@@ -304,22 +348,25 @@ class QA:
                 if not self.tasks._valid_artifact(ref) or not source.is_relative_to(self.root) or not source.is_file():raise ValueError('missing or changed frozen QA input')
                 dest=bundle/(ref['sha256']+'.txt');shutil.copyfile(source,dest)
                 packet['frozen_input_materializations'].append({'source_path':ref['path'],'source_sha256':ref['sha256'],'snapshot_path':str(dest.relative_to(workspace)),'snapshot_sha256':hashlib.sha256(dest.read_bytes()).hexdigest()})
+            packet['image_materializations']=_materialize_images(self.root,workspace,config.get('images',[]))
             context['phase']='worker'
             error=None;result=None;runtime=None
             try:
                 self.tasks.require_dispatch(task_id)
+                if not _images_unchanged(workspace,packet['image_materializations']) or not _images_unchanged(self.root,config.get('images',[])):
+                    raise ValueError('missing or changed frozen QA image before model dispatch')
                 if worker is None:
                     from harness.delegation_runtime import run_codex
-                    runtime=run_codex(self.tasks,task_id,aid,workspace,packet,base/'runtime',executable,timeout,result_schema=RESULT_SCHEMA,result_validator=validate_result,sandbox='workspace-write',image_paths=[r['path'] for r in config.get('images',[])])
+                    runtime=run_codex(self.tasks,task_id,aid,workspace,packet,base/'runtime',executable,timeout,result_schema=RESULT_SCHEMA,result_validator=validate_result,sandbox='workspace-write',image_paths=[r['path'] for r in packet['image_materializations']])
                     if runtime['returncode']!=0:raise ValueError('QA runtime failed: '+str(runtime['returncode']))
                     result=validate_result(runtime['result'])
                 else:result=validate_result(worker(workspace,packet))
             except Exception as exc:error=type(exc).__name__+': '+str(exc)
             context['phase']='verify_workspace'
             frozen_tampered=any(not (workspace/r['snapshot_path']).is_file() or hashlib.sha256((workspace/r['snapshot_path']).read_bytes()).hexdigest()!=r['snapshot_sha256'] for r in packet['frozen_input_materializations'])
-            modified=manifest(workspace,generated)!=before or frozen_tampered
+            modified=manifest(workspace,generated)!=before or frozen_tampered or not _images_unchanged(workspace,packet['image_materializations'])
             self._generated(config,self.tasks.read()['tasks'][task_id])
-            source_changed=scoped_manifest(self.root,config.get('manifest_scope',{'mode':'UNKNOWN'}),config.get('generated_paths',[]))!=source_before
+            source_changed=scoped_manifest(self.root,config.get('manifest_scope',{'mode':'UNKNOWN'}),config.get('generated_paths',[]))!=source_before or not _images_unchanged(self.root,config.get('images',[]))
             context['phase']='commands'
             commands=[]
             if result is not None and not modified and not source_changed:
@@ -333,12 +380,13 @@ class QA:
                     path=base/('command-'+str(index)+'.txt');path.write_text(output)
                     self.tasks.logger.append('qa_command_finished',run_id=self.tasks.run_id,task_id=task_id,agent_run_id=aid,work_type=task['work_type'],feature_id=task['feature_id'],observed={'command':argv,'exit_code':code,'status':status,'evidence':str(path.relative_to(self.root))})
                     commands.append({'command':argv,'status':status,'exit_code':code,'elapsed_seconds':time.monotonic()-started,'evidence':self.tasks.artifact(str(path.relative_to(self.root)))})
-            modified=modified or manifest(workspace,generated)!=before
+            modified=modified or manifest(workspace,generated)!=before or not _images_unchanged(workspace,packet['image_materializations'])
+            source_changed=source_changed or scoped_manifest(self.root,config.get('manifest_scope',{'mode':'UNKNOWN'}),config.get('generated_paths',[]))!=source_before or not _images_unchanged(self.root,config.get('images',[]))
             context['phase']='result_processing'
             problems=[]
             if error:problems.append(error)
             if modified:problems.append('QA changed product files in isolated workspace')
-            if source_changed or scoped_manifest(self.root,config.get('manifest_scope',{'mode':'UNKNOWN'}),config.get('generated_paths',[]))!=source_before:problems.append('target code/baseline changed during QA')
+            if source_changed:problems.append('target code/baseline changed during QA')
             checked={};evidence_refs={}
             if result:
                 rows=result['criteria'];expected={c['id'] for c in task['criteria']}
@@ -375,6 +423,7 @@ class QA:
             outcome='PASS' if passed else 'BLOCKED' if error or modified or source_changed or any('baseline owner decision' in x for x in problems) else 'REWORK' if result and (result['findings'] or any(v=='FAIL' for v in checked.values())) else 'NOT_RUN'
             report={'result':outcome,'worker_report_is_self_report':True,'review_method':'native local evidence and independently executed commands; not an independent model review','target_task_id':config['target_task_id'],'target_manifest':source_before,'criteria':checked,'evidence_refs':evidence_refs,'worker_report':result,'commands':commands,'problems':problems,'runtime':runtime}
             report['authority']='AGENT_QA_OBSERVATION_ONLY'
+            report['image_materializations']=copy.deepcopy(packet['image_materializations'])
             from harness.protected_verification import assess as official_status
             report['official_verification']=official_status(self.root,self.tasks.read()['tasks'][config['target_task_id']])
             report['review_execution']='INDEPENDENT_PROCESS' if worker is None and (runtime or {}).get('pid') else 'SYNTHETIC_OR_LOCAL_WORKER' if worker is not None else 'NOT_RUN'
