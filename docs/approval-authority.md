@@ -66,7 +66,7 @@ UI 호출에 대한 텍스트 응답을 복구할 때 `question_item_id`는 원�
 rtk proxy python3 .kmp-agent/agent.py task --run-id RUN --operation recover-question --data docs/guard-inputs/approval-recovery.json
 ```
 
-digest는 `harness.decisions.digest`의 canonical JSON SHA-256이다. event/response_item ordinal은 고정 native 세션 JSONL의 1부터 시작하는 인접 사용자 입력 레코드 위치다. 복구는 질문의 checkpoint·전체 계약·현재 대상 bytes·원본 세션 경계·정확한 호출/응답을 재검증한다. 계약·대상 파일·코드 기준이 바뀌면 거절하며 새 범위의 기존 재승인 규칙을 따른다. 이미 ANSWERED이면 같은 유효 원본만 재검증하고 다른 답변으로 대체하지 않는다.
+digest는 `harness.decisions.digest`의 canonical JSON SHA-256이다. event/response_item ordinal은 고정 native 세션 JSONL의 1부터 시작하는 인접 사용자 입력 레코드 위치다. 복구는 질문의 checkpoint·전체 계약·현재 대상 bytes·원본 세션 경계·정확한 호출/응답을 재검증한다. 계약·대상 파일과 아래 목적별 유효성 기준이 바뀌면 거절하며 새 범위의 기존 재승인 규칙을 따른다. 이미 ANSWERED이면 같은 유효 원본만 재검증하고 다른 답변으로 대체하지 않는다.
 
 성공하면 기존 질문의 `recovery_history`와 `required_question_answer_recovered` 이벤트에 이유·원문 locator/hash·호출 근거·당시 계약 digest·원래 선택 ID·전후 상태·시각·소비 가능 여부를 기록한다. 같은 근거의 반복 복구는 다시 검증하지만 이력을 중복 생성하지 않는다. 실패하면 잠정 답변·성공 이력을 저장하지 않는다. 소비자는 이력만 믿지 않고 기존 `validate_answer()`를 다시 수행한다.
 
@@ -78,7 +78,13 @@ digest는 `harness.decisions.digest`의 canonical JSON SHA-256이다. event/resp
 
 `open_question(..., supersedes_question_id=...)`은 같은 root/run/purpose/직접 대상 task ID 집합과 이전 `decision_contract` digest를 고정해 새 질문을 만든다. typed 여부와 관계없이 대체 질문에는 전체 동결 질문에 연결된 native 선택 근거와 `approve` 선택이 필요하다. 구조화 UI 또는 [검증된 텍스트 경로](#선택-ui가-응답하지-않을-때의-네이티브-텍스트-선택)만 사용한다. 새 질문이 OPEN·무효·거절이면 기존 대기는 유지한다. `decisions.resolved_answer()`만 합법적인 대체 체인을 따라 새 receipt를 반환하며, 서로 모호한 대체 분기는 거부한다. 소비자는 고정된 옛 질문 ID에서 이 체인을 따라도 현재 purpose/subject/artifacts/task를 정확히 다시 비교한다. 과거 질문·답변을 덮어쓰거나 옛 근거 자체를 유효하게 복원하지 않는다.
 
-일반 untyped 질문은 입력 bytes를 고정하며 출력은 명시한 artifact만 포함한다. typed 질문의 대상에 `development_tracking`이 있으면 `capture()`의 `code_state_sha256`도 정확히 고정한다. 내용·파일 모드·범위·HEAD 변경은 재승인이 필요하며 prompt의 `task_basis_sha256`가 해당 대상을 묶는다. 과거 일반 질문의 native 출처를 typed purpose나 `HUMAN_APPROVAL`로 승격하지 않는다.
+일반 untyped 질문은 입력 bytes를 고정하며 출력은 명시한 artifact만 포함한다. typed 질문의 대상에 `development_tracking`이 있으면 `capture()`의 코드 상태 digest도 개설 계약에 보존하고 prompt의 `task_basis_sha256`가 해당 대상을 묶는다. 기본적으로 내용·파일 모드·범위·HEAD 변경은 재승인이 필요하다. 아래 `requirement_lineage`만 구현 진행과 원본 권한을 구분한다. 과거 일반 질문의 native 출처를 typed purpose나 `HUMAN_APPROVAL`로 승격하지 않는다.
+
+### 원본 권한 승인과 구현 진행
+
+`purpose='requirement_lineage'`는 동결된 요구·기술·원본 소유 범위에 대한 승인이다. 허용된 구현 진행으로 코드 내용·파일 모드·HEAD가 바뀌어도 이 승인 자체를 다시 요구하지 않는다. 질문·선택지·purpose/subject·명시 artifact·대상 task와 실제 입력 bytes, feature·role·task scope, tracking 유무와 `scope`/`code_paths`/`scope_policy`는 계속 일치해야 한다. 명시 artifact나 task 입력에 코드 파일을 포함했다면 그 파일의 bytes도 계속 고정된다. 코드 capture는 계속 실행하므로 symlink 등 기존 capture 실패를 허용하지 않는다. 활성 작업·허용 경로·기술 규칙·승인 명령·검증 게이트는 별도로 유지하며, 이 승인을 코드 검토나 제품 인수로 승격하지 않는다.
+
+이 목적의 현재성 비교에서만 `code_basis.state_sha256`를 제외한다. 개설 계약의 코드 스냅샷·checkpoint·질문 suffix·native 응답·receipt digest·대체 이력은 변경하지 않는다. 따라서 기존 v1의 유효한 typed 응답도 같은 원문으로 재검증할 수 있다. 기존 ANSWERED 승인은 소비 시 검증하고, 필요한 공식 재검증은 기존 `recover-question`을 사용하며 중단된 활성 시도는 `resume`으로 이어간다. 시도 예산 초기화·승인 복제·원장 직접 편집은 하지 않는다. 원본·범위가 바뀌면 새 승인과 기존 명시적 대체 절차가 필요하다. `stage:<stage>`와 그 밖의 typed purpose는 기존의 정확한 코드 상태 비교를 유지한다. 이 수정은 미배포이며 설치본 적용·실제 제품 재검증은 별도다.
 
 ## 소비하는 게이트
 
