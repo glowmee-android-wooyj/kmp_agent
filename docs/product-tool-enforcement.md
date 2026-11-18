@@ -18,6 +18,8 @@
 
 설치 진입점의 `task --operation`은 기존 API의 `register-execution-plan`, `revise-execution-plan`, `configure-execution-policy`, `bind-execution-session`, `configure-task-plan`, `open-question`, `answer-question`도 제공한다. 최초 정책 설정→전체 계획 등록→담당 상세 계획→단계 계약→ready/begin 순서를 따른다. 다음 실행은 기존 정책을 바꾸지 않고 세션을 바인딩한다. 추가 단계는 [전체 계획 확장](execution-policy.md#이미-시작한-전체-계획에-단계-추가)으로 연결한 뒤 상세 계획을 등록한다. JSON 인자 파일은 `docs/guard-inputs/` 아래 준비할 수 있다. `.harness` 원장이나 설치·훅 파일을 raw 편집해 상태를 만들어 넣지 않는다. 새 revise CLI는 v0.4.6에서 추가했으며 기존 v0.4.5 설치본에 소급 적용되지 않는다.
 
+v0.4.11부터 종료된 상위 로그의 열린 작업은 [명령 로그 연결](execution-policy.md#종료된-상위-실행-뒤-명령-로그-이어가기)로 같은 시도의 빌드·테스트를 이어갈 수 있다.
+
 ## 소스·원장이 없는 새 프로젝트의 준비
 
 빈 작업 원장은 구현 허가가 없다는 뜻이지 기획·준비를 중단해야 한다는 뜻이 아니다. 현재 프로젝트의 원본 요구·설정과 설치 지침을 읽고, 새 전체 계획·기획/문서 작업과 필요한 계약을 공식 task 진입점으로 준비한다. 필요한 플랫폼·정책·기술 결정이 없으면 구체적인 질문과 영향 범위를 제시하며, 미응답을 승인으로 만들지 않는다. 이전 구현을 참조하지 않는 요청도 현재 설치 지침의 KMP 등 기술 요구를 폐기하지 않는다.
