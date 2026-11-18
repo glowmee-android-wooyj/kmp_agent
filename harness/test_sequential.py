@@ -172,6 +172,29 @@ class TemporaryProjectCLI(unittest.TestCase):
             (root / "output.md").write_text("synthetic output")
             (root / "src").mkdir()
             (root / "src/App.kt").write_text("val value = 1\n")
+            # Real compile/test subprocesses for a synthetic fixture; no KMP/product build claim.
+            (root / "src/fixture_rules.py").write_text("def add(left, right): return left + right\n")
+            (root / "tools").mkdir()
+            (root / "tools/fixture_checks.py").write_text("""from pathlib import Path
+import importlib.util, py_compile, sys, unittest
+root = Path.cwd()
+artifact = root / '.harness/fixture_rules.pyc'
+if sys.argv[1] == 'build':
+    py_compile.compile('src/fixture_rules.py', cfile=str(artifact), doraise=True)
+    (root / '.harness/build.done').write_text('compiled fixture')
+else:
+    assert (root / '.harness/build.done').is_file()
+    spec = importlib.util.spec_from_file_location('fixture_rules', artifact)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    def check():
+        assert module.add(2, 3) == 5
+        assert (root / 'src/App.kt').read_text() == 'val value = 3\\n'
+    result = unittest.TextTestRunner().run(unittest.TestSuite([unittest.FunctionTestCase(check)]))
+    assert result.wasSuccessful()
+    (root / '.harness/test.done').write_text('fixture test passed')
+""")
+            build_argv = ['rtk', 'proxy', sys.executable, 'tools/fixture_checks.py', 'build']
+            test_argv = ['rtk', 'proxy', sys.executable, 'tools/fixture_checks.py', 'test']
             (root / ".gitignore").write_text(".harness/\n.kmp-agent/\n.codex/\n")
             def git(*args):
                 return subprocess.run(["rtk", "proxy", "git", *args], cwd=root, check=True, capture_output=True)
@@ -195,7 +218,8 @@ class TemporaryProjectCLI(unittest.TestCase):
                 return json.loads(proc.stdout)
             config = Path(temporary) / "settings.json"
             config.write_text(json.dumps({"schema_version": 1, "modules": {"app": ["src"]}, "commands": {
-                "test": {"kind": "test", "argv": ["rtk", "proxy", sys.executable, "-c", "pass"]}}}))
+                "build": {"kind": "build", "argv": build_argv},
+                "test": {"kind": "test", "argv": test_argv}}}))
             cli("init", tracking_settings=config)
             settings_before = (root / seq.SETTINGS).read_bytes()
             cli("init")
@@ -217,7 +241,7 @@ class TemporaryProjectCLI(unittest.TestCase):
             manager.register('F','AUTH','planning','Synthetic source approval','Unit fixture only; never human/product acceptance',[{'id':'A','required':True}],['input.md'],execution_scope='documentation')
             policy={'settings':{'implementation_targets':['jvm'],'ui_technology':'Kotlin Multiplatform CLI','database':None,'server_mode':'none','code_ownership':'synthetic source'},
                     'ui_sharing':'none','ui_owners':{},'platform_entrypoints':{'jvm':['src/App.kt']},
-                    'target_commands':{'jvm':[['rtk','proxy',sys.executable,'-c','pass']]},
+                    'target_commands':{'jvm':[build_argv,test_argv]},
                     'source_rules':[{'glob':'src/*.kt','required_patterns':['val value'],'forbidden_patterns':[]}]}
             lineage={'schema_version':1,'scope':'PRODUCT','purpose':'Synthetic installed CLI contract regression, not actual approval',
                      'sources':[dict(id='U',kind='USER_ORIGINAL',anchor='synthetic source',**file_ref(root,'input.md'))],
@@ -284,7 +308,27 @@ class TemporaryProjectCLI(unittest.TestCase):
             task("ready", {"task_id": "T"})
             run = task("begin", {"task_id": "T", "role": "development"})
             from harness.product_guard import evaluate, authorize_command
+            original_questions = copy.deepcopy(manager.read()['required_questions'])
+            original_native = native.read_bytes()
+            command_run_id = run_id
             for value in (2, 3):
+                if value == 3:
+                    task('checkpoint',dict(task_id='T',agent_run_id=run['agent_run_id'],
+                        reason='Synthetic handoff after authorized implementation',checkpoint='input.md'))
+                    cli('finish',run_id=run_id,result='Synthetic blocked/handoff',end_reason='handoff')
+                    task('resume',dict(task_id='T',agent_run_id=run['agent_run_id'],decision='input.md'))
+                    blocked = cli('command',expected_exit=1,run_id=run_id,task_id='T',
+                        agent_run_id=run['agent_run_id'],attempt_id=run['attempt_id'],command_name='build')
+                    self.assertIn('run already finished',blocked['cause'])
+                    continuation = task('continue-command-run',dict(task_id='T',agent_run_id=run['agent_run_id'],
+                        previous_run_id=run_id,reason='Continue the same approved build/test attempt',evidence='input.md'))
+                    command_run_id = continuation['command_run_id']
+                    continuation_cmd = 'python3 .kmp-agent/agent.py task --run-id ' + run_id + ' --operation continue-command-run --data docs/guard-inputs/continuation.json'
+                    self.assertEqual(evaluate(root,dict(hook_event_name='PreToolUse',cwd=str(root),
+                        session_id=session,tool_name='exec_command',tool_input={'cmd':continuation_cmd})),{})
+                    wrong_root = evaluate(root,dict(hook_event_name='PreToolUse',cwd=str(root),
+                        session_id='wrong-native-session',tool_name='exec_command',tool_input={'cmd':continuation_cmd}))
+                    self.assertEqual(wrong_root['hookSpecificOutput']['permissionDecision'],'deny')
                 preview = '*** Begin Patch\n*** Update File: src/App.kt\n@@\n-val value = ' + str(value - 1) + '\n+val value = ' + str(value) + '\n*** End Patch'
                 self.assertEqual(evaluate(root, dict(hook_event_name='PreToolUse', cwd=str(root),
                     session_id=session, tool_name='apply_patch', tool_input=preview)), {})
@@ -296,18 +340,33 @@ class TemporaryProjectCLI(unittest.TestCase):
             self.assertFalse((root / 'outside/App.kt').exists())
             with self.assertRaisesRegex(ValueError, 'target_commands'):
                 authorize_command(root, manager.read(), 'T', ['unapproved-command'], run_id=run_id)
-            cli("command", run_id=run_id, task_id="T", agent_run_id=run["agent_run_id"], attempt_id=run["attempt_id"], command_name="test")
+            for name in ('build','test'):
+                command = 'python3 .kmp-agent/agent.py command --run-id ' + command_run_id + ' --task-id T --agent-run-id ' + run['agent_run_id'] + ' --attempt-id ' + run['attempt_id'] + ' --command-kind ' + name + " --argv-json '" + json.dumps(build_argv if name=='build' else test_argv) + "'"
+                self.assertEqual(evaluate(root,dict(hook_event_name='PreToolUse',cwd=str(root),
+                    session_id=session,tool_name='exec_command',tool_input={'cmd':command})),{})
+                cli('command',run_id=command_run_id,task_id='T',agent_run_id=run['agent_run_id'],
+                    attempt_id=run['attempt_id'],command_name=name)
+            current = manager.read()
+            self.assertEqual(current['required_questions'],original_questions)
+            self.assertEqual(native.read_bytes(),original_native)
+            self.assertEqual(len(current['tasks']['T']['executions']),1)
+            self.assertEqual(current['tasks']['T']['executions'][0]['run_id'],run_id)
+            self.assertEqual(current['tasks']['T']['executions'][0]['attempt_id'],run['attempt_id'])
+            self.assertTrue((root/'.harness/build.done').is_file())
+            self.assertTrue((root/'.harness/test.done').is_file())
             task("submit", {"task_id": "T", "agent_run_id": run["agent_run_id"], "outputs": ["src/App.kt"], "summary": "synthetic"})
             result = cli("collection-report")
             self.assertEqual(result["commands_without_links"], 0)
-            self.assertEqual(result["commands"][0]["returncode"]["value"], 0)
+            self.assertEqual(len(result['commands']),2)
+            self.assertTrue(all(c['returncode']['value']==0 and c['link']['status']=='COLLECTED' for c in result['commands']))
+            self.assertTrue(all(c['run_id']==command_run_id for c in result['commands']))
             execution = result["tasks"]["T"]["executions"][0]
             self.assertEqual(execution["files"]["value"][0]["path"], "src/App.kt")
             self.assertEqual(execution["observed_modules"]["value"]["src/App.kt"], ["app"])
             self.assertEqual(execution["modification_actor"], "UNKNOWN")
             self.assertEqual(result["parallelization_verdict"], "NOT_EVALUATED")
             self.assertTrue((root / ".harness/logs/sequential-coverage.json").is_file())
-            self.assertEqual(execution["harness"]["value"]["mode"], "development")
+            self.assertEqual(execution["harness"]["value"]["mode"], getattr(self, "expected_installation_mode", "development"))
             refused=cli("finish",expected_exit=1,run_id=run_id,result="synthetic command observed, no QA claim")
             self.assertIn("not officially DONE",refused["cause"])
             bootstrap.install(root, development=ROOT, update=True)

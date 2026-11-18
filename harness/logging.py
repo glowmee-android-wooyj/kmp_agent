@@ -363,20 +363,24 @@ class Logger:
                 attempt_id=UNKNOWN, command_kind=UNKNOWN, command_name=None):
         state_path = self.root / '.harness/tasks/tasks.yaml'
         policy_state = json.loads(state_path.read_text()) if state_path.exists() else {}
+        if policy_state.get('execution_policy') and task_id not in policy_state.get('tasks', {}):
+            raise ValueError('strict managed commands require an explicit planned task')
+        if any(e["run_id"] == run_id and e["event_type"] == "run_finished" for e in self.read()):
+            raise ValueError("run already finished")
+        execution_run_id = run_id
+        if task_id != UNKNOWN and agent_run_id != UNKNOWN and attempt_id != UNKNOWN:
+            from harness.command_runs import execution_run
+            execution_run_id = execution_run(self.root, policy_state, task_id, agent_run_id, attempt_id, run_id)
         managed = None
         from harness.process_ownership import current_lease
         if current_lease(self.root, task_id):
             from harness.tasks import Tasks
-            managed = Tasks(self.root, run_id)
+            managed = Tasks(self.root, execution_run_id)
         if policy_state.get('execution_policy'):
-            if task_id not in policy_state.get('tasks', {}):
-                raise ValueError('strict managed commands require an explicit planned task')
             from harness.tasks import Tasks
-            managed = Tasks(self.root, run_id)
+            managed = Tasks(self.root, execution_run_id)
             managed.require_dispatch(task_id)
         start = self.run(run_id)
-        if any(e["run_id"] == run_id and e["event_type"] == "run_finished" for e in self.read()):
-            raise ValueError("run already finished")
         sys.path.insert(0, str(ROOT))
         from harness.sequential import command_context, validate_settings, KINDS
         context, binding = command_context(self.root, run_id, task_id, agent_run_id, attempt_id)

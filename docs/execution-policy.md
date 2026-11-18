@@ -1,5 +1,32 @@
 # 착수 계획과 필수 답변 대기
 
+## 종료된 상위 실행 뒤 명령 로그 이어가기
+
+`task resume`는 기존 활성 작업·`agent_run_id`·`attempt_id`를 이어가며 상위 로거의 `run_finished`를 취소하지 않는다. 상위 로거가 이미 종료됐다면, 재개 후 아래의 명시적 `continue-command-run`을 사용해 새 **명령 로그 run**을 연결한다. 이 작업은 미배포 소스의 공식 task 진입점이며 v0.4.10 설치본에는 아직 없다.
+
+`docs/guard-inputs/command-continuation.json` 예시:
+
+```json
+{
+  "task_id": "IMPLEMENT",
+  "agent_run_id": "<기존-열린-work-execution-ID>",
+  "previous_run_id": "<직전-종료된-명령로그-run-ID>",
+  "reason": "기존 승인과 같은 시도로 빌드·테스트를 이어 실행",
+  "evidence": "docs/continuation-reason.md"
+}
+```
+
+```sh
+rtk proxy python3 .kmp-agent/agent.py task --run-id ORIGINAL_RUN --operation continue-command-run --data docs/guard-inputs/command-continuation.json
+```
+
+최초 `previous_run_id`는 종료된 원래 상위 run이며 이후 연결이 다시 종료되면 가장 최근 명령 로그 run을 명시한다. 반환된 `command_run_id`는 후속 `command --run-id`에만 사용하고, 작업 lifecycle·승인·계획·사용량의 기존 실행 ID를 새 로그 ID로 바꾸지 않는다. 작업의 `run_id`·원래 native root·동결 계약·시도 예산은 유지된다. 이미 열린 동일 연결의 재호출은 같은 결과를 반환하며 중복 로거를 만들지 않는다.
+
+연결은 기존 작업이 재개된 `IN_PROGRESS`의 열린 work 시도이고, 현재 승인·입력·범위·계획·기술 계약·native root와 실행 소유권 검사를 통과한 경우에만 가능하다. 변경된 원본/범위·다른 root·시도 불일치·동시 executor·불확실한 자식 프로세스는 거부한다. 종료된 원래 run에 직접 명령을 넣거나 무관한 `start` run을 사용하는 경로는 계속 거부한다. 새 명령 run은 제품 완료 권한이 아니며 중단 종료는 `finish --end-reason handoff` 또는 `paused` 등으로 구분한다.
+
+명령 로그는 기존 task 실행의 `command_run_continuations`와 원래 종료 이벤트·새 연결 이벤트를 참조한다. 정상 종료된 개별 명령(0이 아닌 종료 코드 포함)은 실제 종료 코드와 lease/시도에 묶인 완료 근거, 최종 해제된 소유권, 종료 확인된 자식만으로 다음 명령에 소유권을 전달한다. worker·중첩 명령·예외/타임아웃·불확실한 프로세스는 이 근거를 만들지 않는다. 공식 resume 근거는 새 소유권 claim에 한 번만 사용하며 과거 재개 결정으로 이후 중단을 계속 우회하지 않는다. 구버전 소유권 기록에 완료 근거가 없으면 기존 명시적 복구 절차를 따른다.
+
+
 전체 실행 계획은 메인이 만들고, 위임받은 작업의 상세 계획은 담당자가 만든다. 계획에는 무엇을 바꾸는지뿐 아니라 완료 조건, 입력, 출력, 확인 방법을 포함한다. 서브에이전트를 호출한 사실이나 제목만 있는 작업 목록은 상세 계획을 대신하지 않는다.
 
 ## 계획을 만드는 순서

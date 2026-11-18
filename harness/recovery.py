@@ -62,7 +62,35 @@ def basis_identity(value):
     return value
 
 
-def claim(manager, task_id, agent_run_id):
+def _completed_command(run, record):
+    """A normal command return can transfer a clean lease, never a worker."""
+    from harness.process_ownership import inspect_child
+    proof = next((p for p in run.get('command_owner_completions', [])
+                  if p.get('token') == record.get('token')), None)
+    return bool(proof and proof.get('task_id') == run['task_id']
+                and proof.get('agent_run_id') == run['agent_run_id']
+                and proof.get('attempt_id') == run.get('attempt_id')
+                and proof.get('receipt_path') == record.get('receipt_path')
+                and type(proof.get('returncode')) is int
+                and record.get('closed') is True and record.get('released') is True
+                and not record.get('spawn_pending')
+                and all(inspect_child(child)['status'] == 'DEAD'
+                        for child in record.get('children', [])))
+
+
+def _resume_grant(manager, run):
+    """An explicit resume decision authorizes one ownership transfer only."""
+    decisions = run.get('decisions', [])
+    count = len(decisions)
+    if (not count or any(p.get('decision_count') == count for p in run.get('owner_resume_claims', []))
+            or not manager._valid_artifact(run.get('checkpoint', {}))
+            or not manager._valid_artifact(decisions[-1])):
+        return None
+    return {'decision_count': count, 'checkpoint': copy.deepcopy(run['checkpoint']),
+            'decision': copy.deepcopy(decisions[-1])}
+
+
+def claim(manager, task_id, agent_run_id, *, allow_completed_command=False):
     from harness.process_ownership import current_lease
     lease = current_lease(manager.root, task_id)
     if lease is None:
@@ -73,11 +101,17 @@ def claim(manager, task_id, agent_run_id):
         if run.get('ended_at'):
             raise ValueError('cannot claim ended execution')
         previous = run.get('process_owner')
-        if previous and previous.get('token') != lease.record()['token']:
+        new_owner = not previous or previous.get('token') != lease.record()['token']
+        grant = _resume_grant(manager, run) if new_owner else None
+        if previous and new_owner:
             prior = _record(manager.root, run)
-            if not (prior.get('released') and manager._valid_artifact(run.get('checkpoint', {}))
-                    and run.get('decisions') and manager._valid_artifact(run['decisions'][-1])):
+            resumed = prior.get('released') and grant is not None
+            if not (resumed or (allow_completed_command and _completed_command(run, prior))):
                 raise ValueError('unfinished managed execution requires explicit recovery')
+            run.setdefault('process_owner_history', []).append(copy.deepcopy(previous))
+        if grant:
+            grant.update(previous_token=(previous or {}).get('token'), token=lease.record()['token'])
+            run.setdefault('owner_resume_claims', []).append(grant)
         lease.bind(agent_run_id)
         run['process_owner'] = lease.record()
         run.setdefault('recovery_start_basis', workspace_basis(manager, task))
@@ -113,8 +147,26 @@ def owned_command(function):
             claim(manager,task_id,aid)
             return function(manager,task_id,*args,**kwargs)
         with TaskLease(manager.root,task_id):
-            claim(manager,task_id,aid)
-            return function(manager,task_id,*args,**kwargs)
+            claim(manager,task_id,aid,allow_completed_command=True)
+            result = function(manager,task_id,*args,**kwargs)
+            # Only a standalone managed command's normal return certifies this
+            # boundary. Nested worker leases and thrown exceptions remain strict.
+            lease = current_lease(manager.root, task_id)
+            receipt = lease.record()
+            def completed(state):
+                live = state['tasks'][task_id]
+                run = next(r for r in live['executions'] if r['agent_run_id'] == aid)
+                if run.get('ended_at') or run.get('process_owner', {}).get('token') != receipt['token']:
+                    raise ValueError('command ownership changed before completion')
+                if type(getattr(result, 'returncode', None)) is not int:
+                    raise ValueError('managed command completion requires an actual exit code')
+                proof = {'task_id': task_id, 'agent_run_id': aid,
+                         'attempt_id': run.get('attempt_id'), 'token': receipt['token'],
+                         'receipt_path': receipt['receipt_path'], 'returncode': result.returncode}
+                run.setdefault('command_owner_completions', []).append(proof)
+                manager._event(state, 'managed_command_owner_completed', live, aid, observed=proof)
+            manager._mutate('complete_command_owner', completed, task_id)
+            return result
     return wrapped
 
 

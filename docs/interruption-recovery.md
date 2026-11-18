@@ -5,7 +5,7 @@
 
 ## 기록과 근거 구분
 
-중단·재개 이벤트는 모두 기존 run_id를 사용하고 `continuation_of_run_id`를 명시한다. `recorded_at`은 수집 시각이며 `occurred_at`은 사건 시각이다. 과거 사건을 현재 수집 시각으로 대체하지 않는다.
+세션 원문 복구의 중단·재개 이벤트는 기존 run_id를 사용하고 `continuation_of_run_id`를 명시한다. `recorded_at`은 수집 시각이며 `occurred_at`은 사건 시각이다. 과거 사건을 현재 수집 시각으로 대체하지 않는다. 작업 재개와 명령 로그의 재연결은 아래 별도 경로다.
 
 | 분류 | 저장 위치 | 의미 |
 | --- | --- | --- |
@@ -30,6 +30,10 @@ rtk proxy python3 harness/interruptions.py timing <기존-run_id> --scope-start 
 recover는 원본을 한 번 메모리에 읽어 기존 sync로 가져오고, 지정한 턴의 task_complete.error 또는 turn_aborted와 재개 task_started를 찾는다. 모호한 복수 사건이나 역순 시각은 거부한다.
 원본 ID가 다른 두 턴을 같은 하네스 run_id에 연결하는 것이며 기존 실행 ID·단계 ID를 새로 만들지 않는다. 이미 종료된 실행에도 과거 증거를 추가할 수 있지만 종료 시각을 변경하거나 다시 열지 않는다.
 resume_plan은 현재 근거가 유효한 완료 작업의 skip 목록, 미완료 상태, 재검증 이유와 별도 recovery 판정을 반환한다. 현재 상태를 읽은 시각을 함께 남기며 과거 시점의 상태인 것처럼 표현하지 않는다. 이 조회는 작업 실행·상태 수정을 수행하지 않는다. recover-tasks와 resume-task는 별도 명시 호출이며 [실행 복구 계약](recovery-contract.md)의 소유권·checkpoint·승인 조건을 적용한다.
+
+## 작업은 재개됐지만 상위 명령 run이 종료된 경우
+
+`run already finished`이면 기존 `run_finished`를 지우거나 원장을 편집하지 않는다. 먼저 기존 checkpoint와 승인으로 원래 task의 `resume`을 수행하고, [명령 로그 연결](execution-policy.md#종료된-상위-실행-뒤-명령-로그-이어가기)의 `continue-command-run`을 원래 task run에서 호출한다. 새 명령 로그 ID에 기존 task/agent/attempt ID를 함께 제공해 빌드·테스트를 실행한다. 같은 work 시도를 보존하는 연결이며 새 시도·재승인·자동 제품 재개가 아니다. 실행 소유권이 불확실하면 별도의 기존 복구부터 수행한다. 이 수정은 미배포이며 실제 제품 설치·기존 실행 재검증은 별도다.
 
 ## 시간 분류와 중복 방지
 

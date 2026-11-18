@@ -214,12 +214,15 @@ def command_context(root, run_id, task_id, agent_run_id, attempt_id):
         return {"task_id": UNKNOWN, "agent_run_id": UNKNOWN, "feature_id": UNKNOWN}, {"attempt_id": UNKNOWN, "link_status": "MISSING"}
     if not all(supplied):
         raise ValueError("command link needs task_id, agent_run_id and attempt_id together")
-    task = read_state(root)["tasks"].get(task_id)
+    state = read_state(root)
+    task = state["tasks"].get(task_id)
     runs = [r for r in task["executions"] if r["agent_run_id"] == agent_run_id] if task else []
-    if len(runs) != 1 or runs[0].get("attempt_id") != attempt_id or runs[0]["run_id"] != run_id or runs[0]["ended_at"] is not None or task["state"] == "BLOCKED":
+    from harness.command_runs import linked
+    if len(runs) != 1 or runs[0].get("attempt_id") != attempt_id or not linked(root,state,task,runs[0],run_id) or runs[0]["ended_at"] is not None or task["state"] == "BLOCKED":
         raise ValueError("command IDs must identify an active, unblocked execution attempt in this run")
     return {"task_id": task_id, "agent_run_id": agent_run_id, "feature_id": task["feature_id"]}, {
-        "attempt_id": attempt_id, "link_status": "COLLECTED", "input_bundle_id": runs[0].get("collection", {}).get("input_bundle_id", UNKNOWN)}
+        "attempt_id": attempt_id, "link_status": "COLLECTED", "input_bundle_id": runs[0].get("collection", {}).get("input_bundle_id", UNKNOWN),
+        "execution_run_id": runs[0]['run_id']}
 
 
 def report(root):
@@ -239,8 +242,10 @@ def report(root):
         evidence = [start.get("event_id", UNKNOWN)] + ([end.get("event_id", UNKNOWN)] if end else [])
         related_task = state["tasks"].get(start.get("task_id"), {})
         related_runs = [r for r in related_task.get("executions", []) if r["agent_run_id"] == start.get("agent_run_id")]
+        from harness.command_runs import linked as linked_run
         linked = (len(related_runs) == 1 and obs.get("attempt_id", UNKNOWN) != UNKNOWN
-                  and related_runs[0].get("attempt_id") == obs["attempt_id"] and related_runs[0]["run_id"] == start.get("run_id"))
+                  and related_runs[0].get("attempt_id") == obs["attempt_id"]
+                  and linked_run(root,state,related_task,related_runs[0],start.get('run_id'),historical=True))
         commands.append({"call_id": obs.get("call_id", UNKNOWN), "run_id": start.get("run_id", UNKNOWN),
             "task_id": start.get("task_id", UNKNOWN), "agent_run_id": start.get("agent_run_id", UNKNOWN),
             "link": cell(obs.get("attempt_id", UNKNOWN), evidence, missing=not linked),

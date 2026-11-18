@@ -367,10 +367,22 @@ def _content_read(args):
         raise ValueError('headroom_retrieve requires exactly one literal hash string; retry with {"hash":"<hash from the compressed output>"}, not id; keep the returned hash unchanged')
 
 
-def _option(argv, name):
-    if argv.count(name) != 1 or argv.index(name)+1 >= len(argv):
-        raise ValueError('explicit '+name+' required')
-    return argv[argv.index(name)+1]
+def _option(argv, name, required=True):
+    values = []
+    for index, value in enumerate(argv):
+        if value == name:
+            if index + 1 >= len(argv):
+                raise ValueError('explicit '+name+' required')
+            values.append(argv[index + 1])
+        elif value.startswith(name + '='):
+            values.append(value[len(name) + 1:])
+    if len(values) > 1:
+        raise ValueError('duplicate '+name+' is ambiguous')
+    if not values:
+        if required:
+            raise ValueError('explicit '+name+' required')
+        return None
+    return values[0]
 
 
 def _git_read(args):
@@ -482,6 +494,9 @@ def _shell(root, state, session, command):
             return  # argparse help is diagnostic, independent of product state.
         state = state if state is not None else _state(root)
         if action in MANAGEMENT:
+            if action == 'task' and _option(argv,'--operation',required=False) == 'continue-command-run':
+                if _option(argv,'--run-id') not in _runs(state,session):
+                    raise ValueError('command continuation belongs to a different native root session')
             if action in {'planning','design','development','verification','qa'}:
                 task = state.get('tasks',{}).get(_option(argv,'--task-id'),{})
                 if task.get('work_type') != 'PRODUCT':
@@ -521,8 +536,10 @@ def authorize_command(root, state, task_id, argv, run_id=None):
     if task.get('state') != 'IN_PROGRESS' or len(works) != 1:
         raise ValueError('installed product command requires one active implementation execution')
     run = works[0]['run_id']
-    if run_id is not None and run_id != run:
-        raise ValueError('installed product command run differs from active execution')
+    if run_id is not None:
+        from harness.command_runs import linked
+        if not linked(root,state,task,works[0],run_id):
+            raise ValueError('installed product command run differs from active execution')
     session = state.get('execution_policy_bindings',{}).get(run,{}).get('root_session_id')
     _, selected = active(root,state,session,task_id=task_id)
     if selected['task_id'] != task_id:
