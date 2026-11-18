@@ -239,18 +239,20 @@ class TemporaryProjectCLI(unittest.TestCase):
                 stages[stage]={'task_id':tid,'checks':checks}
             attach_existing(manager,['P','D','PLAN','T'],'IMPLEMENT','delivery_with_qa','Synthetic installed command coverage','input.md','Connect fixture before any work')
             manager.configure_execution_policy(str(native),session,apply_to_work_types=['PRODUCT'])
-            manager.open_question('SYNTHETIC-APPROVAL','Synthetic unit only: approve exact technology source for command transport?', ['AUTH'],
-                [{'id':'approve','label':'Approve synthetic unit policy'}],approval_purpose='requirement_lineage',
-                approval_subject=approval_subject(load(root)),approval_artifacts=['input.md','derived.md'])
-            question=manager.question_status()['SYNTHETIC-APPROVAL']['question']
-            call='synthetic-sequential-prompt'
-            native_records.append({'type':'response_item','payload':{'type':'function_call','name':'request_user_input_async','call_id':call,'arguments':json.dumps({'questions':[{'question':question,'options':['Approve synthetic unit policy']}]})}})
-            item=json.dumps(['request_user_input_async',call,0],separators=(',',':'))
-            text='<send_user_message_question_reply>\n'+json.dumps([{'answer':'Approve synthetic unit policy','question':question,'questionItemId':item}])+'\n</send_user_message_question_reply>'
-            event={'type':'event_msg','payload':{'type':'user_message','message':text}}
-            user={'type':'response_item','payload':{'type':'message','role':'user','content':[{'type':'input_text','text':text}]}}
-            native_records.extend([event,user]);native.write_text(''.join(json.dumps(r)+'\n' for r in native_records))
-            manager.answer_question('SYNTHETIC-APPROVAL',record_ordinal=3,payload_sha256=digest(event['payload']),user_input_record_ordinal=4,user_input_payload_sha256=digest(user['payload']))
+            def approve_lineage(qid, targets):
+                manager.open_question(qid,'Synthetic unit only: approve exact technology source for command transport?', targets,
+                    [{'id':'approve','label':'Approve synthetic unit policy'}],approval_purpose='requirement_lineage',
+                    approval_subject=approval_subject(load(root)),approval_artifacts=['input.md','derived.md'])
+                question=manager.question_status()[qid]['question']
+                call='synthetic-sequential-prompt-'+qid
+                native_records.append({'type':'response_item','payload':{'type':'function_call','name':'request_user_input_async','call_id':call,'arguments':json.dumps({'questions':[{'question':question,'options':['Approve synthetic unit policy']}]})}})
+                item=json.dumps(['request_user_input_async',call,0],separators=(',',':'))
+                text='<send_user_message_question_reply>\n'+json.dumps([{'answer':'Approve synthetic unit policy','question':question,'questionItemId':item}])+'\n</send_user_message_question_reply>'
+                event={'type':'event_msg','payload':{'type':'user_message','message':text}}
+                user={'type':'response_item','payload':{'type':'message','role':'user','content':[{'type':'input_text','text':text}]}}
+                native_records.extend([event,user]);native.write_text(''.join(json.dumps(r)+'\n' for r in native_records))
+                manager.answer_question(qid,record_ordinal=len(native_records)-1,payload_sha256=digest(event['payload']),user_input_record_ordinal=len(native_records),user_input_payload_sha256=digest(user['payload']))
+            approve_lineage('SYNTHETIC-APPROVAL', ['AUTH'])
             settings={k:{'status':'CONFIRMED','value':'synthetic contract','reason':'synthetic unit only'} for k in FIELDS}
             for key in DOCUMENTS:settings[key]['value']='input.md'
             for key,value in policy['settings'].items():settings[key]['value']=value
@@ -277,10 +279,24 @@ class TemporaryProjectCLI(unittest.TestCase):
                     'Synthetic orchestration fixture; no real reviewer/model/product claim')
                 upstream.append(document)
             manager.bind_stage_inputs('T',[a['path'] for a in manager.read()['tasks']['T']['inputs']]+upstream,'Bind current synthetic stage documents')
+            # Also authorize this tracked task; preserve the existing document approval.
+            approve_lineage('SYNTHETIC-CODE-APPROVAL', ['T'])
             task("ready", {"task_id": "T"})
             run = task("begin", {"task_id": "T", "role": "development"})
+            from harness.product_guard import evaluate, authorize_command
+            for value in (2, 3):
+                preview = '*** Begin Patch\n*** Update File: src/App.kt\n@@\n-val value = ' + str(value - 1) + '\n+val value = ' + str(value) + '\n*** End Patch'
+                self.assertEqual(evaluate(root, dict(hook_event_name='PreToolUse', cwd=str(root),
+                    session_id=session, tool_name='apply_patch', tool_input=preview)), {})
+                (root / "src/App.kt").write_text("val value = " + str(value) + "\n")
+            outside = '*** Begin Patch\n*** Add File: outside/App.kt\n+val value = 1\n*** End Patch'
+            denied = evaluate(root, dict(hook_event_name='PreToolUse', cwd=str(root),
+                session_id=session, tool_name='apply_patch', tool_input=outside))
+            self.assertEqual(denied['hookSpecificOutput']['permissionDecision'], 'deny')
+            self.assertFalse((root / 'outside/App.kt').exists())
+            with self.assertRaisesRegex(ValueError, 'target_commands'):
+                authorize_command(root, manager.read(), 'T', ['unapproved-command'], run_id=run_id)
             cli("command", run_id=run_id, task_id="T", agent_run_id=run["agent_run_id"], attempt_id=run["attempt_id"], command_name="test")
-            (root / "src/App.kt").write_text("val value = 2\n")
             task("submit", {"task_id": "T", "agent_run_id": run["agent_run_id"], "outputs": ["src/App.kt"], "summary": "synthetic"})
             result = cli("collection-report")
             self.assertEqual(result["commands_without_links"], 0)

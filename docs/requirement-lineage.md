@@ -15,7 +15,7 @@ PRODUCT의 미승인 변경은 보완/사용자 결정 대기로 반환한다. H
 
 ## 구조 비교와 인간 승인
 
-기존 `structurally_ready`는 링크·값·변경 결정의 구조 비교 결과로 유지한다. 로컬 `USER_ORIGINAL`/`APPROVED_REQUIREMENTS` 라벨이나 anchor는 실제 인간 권한을 증명하지 않는다. `authorization_ready`와 `human_authorization`을 별도로 표시한다. PRODUCT는 source kind·APPROVED 주장 유무와 관계없이 `human_authorization.question_id/task_id`가 현재 계약의 source·requirements·derived_items·decisions와 모든 source 파일 해시를 승인한 typed `HUMAN_APPROVAL`에 연결돼야 한다. purpose는 `requirement_lineage`, subject는 `approval_subject(contract)`다. 질문·원본·대상 입력·산출물 변경은 소비 시 다시 검사한다.
+기존 `structurally_ready`는 링크·값·변경 결정의 구조 비교 결과로 유지한다. 로컬 `USER_ORIGINAL`/`APPROVED_REQUIREMENTS` 라벨이나 anchor는 실제 인간 권한을 증명하지 않는다. `authorization_ready`와 `human_authorization`을 별도로 표시한다. PRODUCT는 source kind·APPROVED 주장 유무와 관계없이 `human_authorization.question_id/task_id`가 현재 계약의 source·requirements·derived_items·decisions와 모든 source 파일 해시를 승인한 typed `HUMAN_APPROVAL`에 연결돼야 한다. purpose는 `requirement_lineage`, subject는 `approval_subject(contract)`다. 질문·원본·대상 입력·명시 artifact·작업 소유와 범위는 소비 시 다시 검사한다. [원본 권한과 구현 진행](approval-authority.md#원본-권한-승인과-구현-진행)을 구분하므로 허용된 구현 코드 변경만으로 이 원본 승인을 무효화하지 않으며, 기존 개설 스냅샷과 native 응답은 보존한다. 정확한 코드 상태의 승인·검증을 대신하는 것은 아니다.
 
 PRODUCT의 `require_review()`는 구조 비교가 통과해도 인간 권한이 없거나 오래됐거나 다른 task 것이면 차단한다. HARNESS_TRIAL에서 승인 주장이 없을 때만 `NOT_REQUIRED`를 허용한다. PRODUCT 작업에 HARNESS_TRIAL 계약을 사용하는 것은 차단한다. source kind를 낮춰 인간 승인 조건을 피할 수 없다. HARNESS_TRIAL이나 독립 requirements QA PASS를 인간 제품 승인으로 승격하지 않는다. 기존 비교 이력을 다시 쓰지 않고 현재 실행 경계에서 검사한다. [승인·검토 권한](approval-authority.md)의 native 및 same-OS 한계를 따른다.
 

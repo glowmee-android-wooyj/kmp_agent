@@ -378,7 +378,19 @@ def _contract_current(state, q, root=None):
         if q.get(key) != contract[key]:
             return False
     ids = sorted(q['affected_task_ids'])
-    if ids != contract['affected_task_ids'] or _task_basis(state, root, ids, include_code=bool(contract.get('purpose'))) != contract['tasks']:
+    current_tasks = _task_basis(state, root, ids, include_code=bool(contract.get('purpose')))
+    expected_tasks = contract['tasks']
+    if contract.get('purpose') == 'requirement_lineage':
+        # Source authorization permits implementation progress, not a new input
+        # or code scope. Keep capture's fail-closed checks and compare every
+        # scope field, but treat the opening code digest as audit evidence.
+        # Copies preserve existing v1 contracts/checkpoints/native receipts.
+        current_tasks, expected_tasks = copy.deepcopy(current_tasks), copy.deepcopy(expected_tasks)
+        for tasks in (current_tasks, expected_tasks):
+            for basis in tasks.values():
+                if isinstance(basis.get('code_basis'), dict):
+                    basis['code_basis'].pop('state_sha256', None)
+    if ids != contract['affected_task_ids'] or current_tasks != expected_tasks:
         return False
     if _files(root, list(contract['artifacts'])) != contract['artifacts']:
         return False
