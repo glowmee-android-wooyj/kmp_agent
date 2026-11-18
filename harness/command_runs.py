@@ -19,7 +19,7 @@ def _events(root):
     return Logger(root).read()
 
 
-def linked(root, state, task, execution, command_run_id, *, historical=False):
+def linked(root, state, task, execution, command_run_id, *, historical=False, records=None):
     """A new log run grants command logging only, never task lifecycle ownership."""
     if command_run_id == execution['run_id']:
         return True
@@ -27,7 +27,8 @@ def linked(root, state, task, execution, command_run_id, *, historical=False):
     if not isinstance(links, list) or not links:
         return False
     candidates = links if historical else links[-1:]
-    records = _events(root)
+    if records is None:
+        records = _events(root)
     for link in candidates:
         if (link.get('command_run_id') != command_run_id
                 or link.get('execution_run_id') != execution['run_id']

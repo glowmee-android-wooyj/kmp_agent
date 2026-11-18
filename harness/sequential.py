@@ -227,6 +227,7 @@ def command_context(root, run_id, task_id, agent_run_id, attempt_id):
 
 def report(root):
     """Read-only coverage; no state refresh, historical enrichment or scheduling verdict."""
+    from harness.command_runs import linked as linked_run
     state = read_state(root)
     events = log.Logger(root).read()
     def cell(value=UNKNOWN, evidence=None, missing=False):
@@ -242,10 +243,10 @@ def report(root):
         evidence = [start.get("event_id", UNKNOWN)] + ([end.get("event_id", UNKNOWN)] if end else [])
         related_task = state["tasks"].get(start.get("task_id"), {})
         related_runs = [r for r in related_task.get("executions", []) if r["agent_run_id"] == start.get("agent_run_id")]
-        from harness.command_runs import linked as linked_run
         linked = (len(related_runs) == 1 and obs.get("attempt_id", UNKNOWN) != UNKNOWN
                   and related_runs[0].get("attempt_id") == obs["attempt_id"]
-                  and linked_run(root,state,related_task,related_runs[0],start.get('run_id'),historical=True))
+                  and linked_run(root,state,related_task,related_runs[0],start.get('run_id'),
+                                 historical=True, records=events))
         commands.append({"call_id": obs.get("call_id", UNKNOWN), "run_id": start.get("run_id", UNKNOWN),
             "task_id": start.get("task_id", UNKNOWN), "agent_run_id": start.get("agent_run_id", UNKNOWN),
             "link": cell(obs.get("attempt_id", UNKNOWN), evidence, missing=not linked),

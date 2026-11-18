@@ -33,7 +33,7 @@ resume_plan은 현재 근거가 유효한 완료 작업의 skip 목록, 미완�
 
 ## 작업은 재개됐지만 상위 명령 run이 종료된 경우
 
-`run already finished`이면 기존 `run_finished`를 지우거나 원장을 편집하지 않는다. 먼저 기존 checkpoint와 승인으로 원래 task의 `resume`을 수행하고, [명령 로그 연결](execution-policy.md#종료된-상위-실행-뒤-명령-로그-이어가기)의 `continue-command-run`을 원래 task run에서 호출한다. 새 명령 로그 ID에 기존 task/agent/attempt ID를 함께 제공해 빌드·테스트를 실행한다. 같은 work 시도를 보존하는 연결이며 새 시도·재승인·자동 제품 재개가 아니다. 실행 소유권이 불확실하면 별도의 기존 복구부터 수행한다. 이 수정은 미배포이며 실제 제품 설치·기존 실행 재검증은 별도다.
+`run already finished`이면 기존 `run_finished`를 지우거나 원장을 편집하지 않는다. 작업이 `BLOCKED`이면 기존 checkpoint와 승인으로 복구해 `IN_PROGRESS`로 돌아간다. 이미 `IN_PROGRESS`라면 기존 열린 work 실행을 사용한다. 이어서 [명령 로그 연결](execution-policy.md#종료된-상위-실행-뒤-명령-로그-이어가기)의 `continue-command-run`을 원래 task run에서 호출한다. 새 명령 로그 ID에 기존 task/agent/attempt ID를 함께 제공해 빌드·테스트를 실행한다. 같은 work 시도를 보존하는 연결이며 새 시도·재승인·자동 제품 재개가 아니다. 실행 소유권이 불확실하면 별도의 기존 복구부터 수행한다. 이 경로는 v0.4.11부터 지원한다.
 
 ## 시간 분류와 중복 방지
 
