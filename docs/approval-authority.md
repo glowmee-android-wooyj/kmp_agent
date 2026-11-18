@@ -84,7 +84,7 @@ digest는 `harness.decisions.digest`의 canonical JSON SHA-256이다. event/resp
 
 `purpose='requirement_lineage'`는 동결된 요구·기술·원본 소유 범위에 대한 승인이다. 허용된 구현 진행으로 코드 내용·파일 모드·HEAD가 바뀌어도 이 승인 자체를 다시 요구하지 않는다. 질문·선택지·purpose/subject·명시 artifact·대상 task와 실제 입력 bytes, feature·role·task scope, tracking 유무와 `scope`/`code_paths`/`scope_policy`는 계속 일치해야 한다. 명시 artifact나 task 입력에 코드 파일을 포함했다면 그 파일의 bytes도 계속 고정된다. 코드 capture는 계속 실행하므로 symlink 등 기존 capture 실패를 허용하지 않는다. 활성 작업·허용 경로·기술 규칙·승인 명령·검증 게이트는 별도로 유지하며, 이 승인을 코드 검토나 제품 인수로 승격하지 않는다.
 
-이 목적의 현재성 비교에서만 `code_basis.state_sha256`를 제외한다. 개설 계약의 코드 스냅샷·checkpoint·질문 suffix·native 응답·receipt digest·대체 이력은 변경하지 않는다. 따라서 기존 v1의 유효한 typed 응답도 같은 원문으로 재검증할 수 있다. 기존 ANSWERED 승인은 소비 시 검증하고, 필요한 공식 재검증은 기존 `recover-question`을 사용하며 중단된 활성 시도는 `resume`으로 이어간다. 시도 예산 초기화·승인 복제·원장 직접 편집은 하지 않는다. 원본·범위가 바뀌면 새 승인과 기존 명시적 대체 절차가 필요하다. `stage:<stage>`와 그 밖의 typed purpose는 기존의 정확한 코드 상태 비교를 유지한다. 이 수정은 미배포이며 설치본 적용·실제 제품 재검증은 별도다.
+이 목적의 현재성 비교에서만 `code_basis.state_sha256`를 제외한다. 개설 계약의 코드 스냅샷·checkpoint·질문 suffix·native 응답·receipt digest·대체 이력은 변경하지 않는다. 따라서 기존 v1의 유효한 typed 응답도 같은 원문으로 재검증할 수 있다. 기존 ANSWERED 승인은 소비 시 검증하고, 필요한 공식 재검증은 기존 `recover-question`을 사용하며 중단된 활성 시도는 `resume`으로 이어간다. 시도 예산 초기화·승인 복제·원장 직접 편집은 하지 않는다. 원본·범위가 바뀌면 새 승인과 기존 명시적 대체 절차가 필요하다. `stage:<stage>`와 그 밖의 typed purpose는 기존의 정확한 코드 상태 비교를 유지한다. 이 수정은 [v0.4.10 지원 범위](releases/v0.4.10.md)에 포함되며 설치본 적용·실제 제품 재검증은 별도다.
 
 ## 소비하는 게이트
 
