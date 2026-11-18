@@ -17,6 +17,7 @@
 | `v0.4.7` / VERSION `0.4.7` | [0.4.7 지원 범위](v0.4.7.md) · [본문 원본](v0.4.7-notes.md) | PR #25: 네이티브 승인 응답 인증·중복 차단·감사 복구. 최종 SHA·원격 검증·게시 결과는 [GitHub Release](https://github.com/wooyj-1217/kmp_agent/releases/tag/v0.4.7)에서 확정 |
 | `v0.4.8` / VERSION `0.4.8` | [0.4.8 지원 범위](v0.4.8.md) · [본문 원본](v0.4.8-notes.md) | PR #27: 선택 UI 미응답 시 동결 질문의 네이티브 텍스트 선택·복구. 최종 SHA·원격 검증·게시 결과는 [GitHub Release](https://github.com/wooyj-1217/kmp_agent/releases/tag/v0.4.8)에서 확정 |
 | `v0.4.9` / VERSION `0.4.9` | [0.4.9 지원 범위](v0.4.9.md) · [본문 원본](v0.4.9-notes.md) | PR #29: 명시 QA 이미지 격리 전달·현재 출력 검사·공식 이슈 해소 CLI. 최종 SHA·원격 검증·게시 결과는 [GitHub Release](https://github.com/wooyj-1217/kmp_agent/releases/tag/v0.4.9)에서 확정 |
+| `v0.4.10` / VERSION `0.4.10` | [0.4.10 지원 범위](v0.4.10.md) · [본문 원본](v0.4.10-notes.md) | PR #31: 원본 승인과 구현 진행 분리·기존 v1 승인 호환성. 최종 SHA·원격 검증·게시 결과는 [GitHub Release](https://github.com/wooyj-1217/kmp_agent/releases/tag/v0.4.10)에서 확정 |
 | `v0.5.0` 철회 완료 | [당시 지원 범위](v0.5.0.md) · [당시 본문 원본](v0.5.0-notes.md) | 2026-11-12 사용자 명시 요청으로 태그·Release 삭제 확인. 기존 커밋 이력·검증 원본 보존. 변경 사항은 v0.4.2에 포함하며 최종 배포 결과는 해당 Release에서 확인 |
 | 최초 작업본 조사(과거 기록) | [작업본](working-tree.md) | VERSION 0.1.0이던 최초 조사와 당시 해시를 보존. 배포 식별·게시 여부는 위 버전별 행 참조 |
 
