@@ -109,6 +109,53 @@ class ObservationTests(unittest.TestCase):
         result=logging.snapshot(self.root,prune_generated=True)
         self.assertIn('build/source',result)
 
+    def test_worker_deadline_bounds_event_and_state_lock_waits(self):
+        import fcntl
+        import threading
+        from harness.command_preflight import Preflight, PreflightTimeout
+        from harness.tracking_io import bounded_flock, state_lock
+        for kind in ('events','state'):
+            with self.subTest(kind=kind):
+                lock_path=self.root/(kind+'.lock')
+                errors=[]
+                def work():
+                    try:
+                        with Preflight(self.root,.05):
+                            if kind=='events':
+                                with lock_path.open('a+') as handle:bounded_flock(handle)
+                            else:
+                                with state_lock(self.root,lock_path,'synthetic'):pass
+                    except Exception as error:errors.append(error)
+                with lock_path.open('a+') as owner:
+                    fcntl.flock(owner,fcntl.LOCK_EX)
+                    thread=threading.Thread(target=work);thread.start();thread.join(1)
+                    self.assertFalse(thread.is_alive(),'worker lock wait exceeded its deadline')
+                self.assertEqual(len(errors),1)
+                self.assertIsInstance(errors[0],PreflightTimeout)
+
+    def test_worker_git_preflight_expiry_is_not_reclassified_as_invalid_approval(self):
+        import sys
+        import threading
+        from harness.command_preflight import Preflight, PreflightTimeout
+        from harness.tracking_io import run_git
+        original=subprocess.Popen
+        errors=[]
+        def slow_git(argv,**kwargs):
+            return original([sys.executable,'-c','import time; time.sleep(2)'],**kwargs)
+        def work():
+            try:
+                with Preflight(self.root,.05):
+                    run_git(self.root,'status')
+            except Exception as error:errors.append(error)
+        with patch('harness.tracking_io.subprocess.Popen',side_effect=slow_git):
+            thread=threading.Thread(target=work);thread.start();thread.join(3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors),1)
+        self.assertIsInstance(errors[0],PreflightTimeout)
+        records=[json.loads(line) for path in (self.root/'.harness/logs/command-preflight').glob('*.jsonl') for line in path.read_text().splitlines()]
+        self.assertTrue(any(row['state']=='TIMED_OUT' for row in records))
+        self.assertFalse(any(row['state']=='FAILED' for row in records))
+
     def test_native_batch_reuses_parsing_but_reads_exact_bytes_and_appends_again(self):
         session='00000000-0000-4000-8000-000000000913'
         path=self.root/'native.jsonl'

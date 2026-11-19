@@ -123,21 +123,53 @@ class CommandPreflightTests(unittest.TestCase):
             result=self.command(on_spawn=lambda child:observed.append(child.pid))
         self.assertEqual(result.returncode,0)
 
-    def test_alarm_handler_restored_and_non_main_thread_fails_before_checks(self):
+    def test_main_thread_timeout_restores_alarm_handler(self):
         previous = signal.getsignal(signal.SIGALRM)
         with self.assertRaises(PreflightTimeout):
             with Preflight(self.root,.02):time.sleep(.1)
         self.assertEqual(signal.getsignal(signal.SIGALRM),previous)
         self.assertEqual(signal.getitimer(signal.ITIMER_REAL),(0.0,0.0))
+        self.assertEqual(self.diagnostics()[-1]['deadline_mode'],'SIGNAL')
+
+    def test_worker_thread_runs_managed_command_without_changing_parent_alarm(self):
+        previous=signal.getsignal(signal.SIGALRM)
+        handler=lambda *args:None
+        signal.signal(signal.SIGALRM,handler)
+        signal.setitimer(signal.ITIMER_REAL,5)
+        results=[]; errors=[]
+        try:
+            def invoke():
+                try:results.append(self.command())
+                except BaseException as error:errors.append(error)
+            with patch('harness.command_preflight.signal.signal',side_effect=AssertionError('worker changed handler')), \
+                    patch('harness.command_preflight.signal.setitimer',side_effect=AssertionError('worker changed timer')):
+                worker=threading.Thread(target=invoke);worker.start();worker.join(3)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors,[])
+            self.assertEqual(results[0].returncode,0)
+            self.assertIs(signal.getsignal(signal.SIGALRM),handler)
+            self.assertGreater(signal.getitimer(signal.ITIMER_REAL)[0],0)
+            self.assertTrue(all(row['deadline_mode']=='COOPERATIVE' for row in self.diagnostics()))
+        finally:
+            signal.setitimer(signal.ITIMER_REAL,0)
+            signal.signal(signal.SIGALRM,previous)
+
+    def test_worker_thread_deadline_rejects_slow_stage_before_spawning(self):
         errors=[]
         def invoke():
-            try:self.command()
+            try:self.command(preflight_timeout=.03)
             except BaseException as error:errors.append(error)
-        with patch('harness.execution_policy.subprocess.Popen') as spawn:
-            thread=threading.Thread(target=invoke);thread.start();thread.join(2)
+        start=time.monotonic()
+        with patch.object(self.m,'require_dispatch',side_effect=lambda *args,**kwargs:time.sleep(.1)), \
+                patch('harness.execution_policy.subprocess.Popen') as spawn:
+            worker=threading.Thread(target=invoke);worker.start();worker.join(2)
             spawn.assert_not_called()
-        self.assertIsInstance(errors[0],ValueError)
-        self.assertIn('main thread',str(errors[0]))
+        self.assertFalse(worker.is_alive())
+        self.assertIsInstance(errors[0],PreflightTimeout)
+        self.assertIn('ownership_dispatch',str(errors[0]))
+        self.assertLess(time.monotonic()-start,.5)
+        self.assertEqual(self.diagnostics()[-1]['state'],'TIMED_OUT')
+        self.assertEqual(self.diagnostics()[-1]['deadline_mode'],'COOPERATIVE')
 
     def test_invalid_deadlines_fail_before_any_spawn(self):
         for value in (0,-1,float('inf'),float('nan'),True,'60'):

@@ -1,8 +1,11 @@
 """Bounded command checks and diagnostic progress; never an approval cache.
 
-The alarm covers checks, not the owned command's runtime. Process creation is
-an explicit boundary: interrupting Popen before it returns can lose the only
-safe child handle, so the alarm is disarmed immediately before that boundary.
+Main-thread commands use an alarm; existing worker threads use the same total
+deadline cooperatively before and after stages and through bounded inspection
+I/O. Worker threads never change a process-wide signal handler or timer. A
+blocking kernel read cannot be preempted cooperatively. Process creation is an
+explicit boundary: interrupting Popen before it returns can lose the only safe
+child handle, so prelaunch checks stop immediately before that boundary.
 """
 import contextlib
 import contextvars
@@ -41,11 +44,12 @@ class Preflight:
         self.spawned = False
         self.records = []
         self.previous_timer = self.previous_handler = None
+        self.mode = 'COOPERATIVE'
 
     def emit(self, state, **extra):
         record = dict(call_id=self.call_id, stage=self.name, state=state,
                       elapsed_seconds=time.monotonic()-self.started,
-                      timeout_seconds=self.timeout, **extra)
+                      timeout_seconds=self.timeout, deadline_mode=self.mode, **extra)
         self.records.append(record)
         line = (json.dumps(record, sort_keys=True)+'\n').encode()
         # Diagnostics contain no argv, source bytes or approval contents.
@@ -74,13 +78,14 @@ class Preflight:
             'and task ownership before retry' % (self.timeout, self.name, self.call_id))
 
     def __enter__(self):
-        if threading.current_thread() is not threading.main_thread() or not hasattr(signal, 'setitimer'):
-            raise ValueError('bounded command preflight requires the main thread; use the official command CLI')
-        self.previous_handler = signal.getsignal(signal.SIGALRM)
-        self.previous_timer = signal.getitimer(signal.ITIMER_REAL)
-        # Do not steal another subsystem's pending alarm.
-        if self.previous_timer[0] > 0:
-            raise ValueError('bounded command preflight cannot replace an active process alarm')
+        self.mode = ('SIGNAL' if threading.current_thread() is threading.main_thread()
+                     and hasattr(signal, 'setitimer') else 'COOPERATIVE')
+        if self.mode == 'SIGNAL':
+            self.previous_handler = signal.getsignal(signal.SIGALRM)
+            self.previous_timer = signal.getitimer(signal.ITIMER_REAL)
+            # Do not steal another subsystem's pending alarm.
+            if self.previous_timer[0] > 0:
+                raise ValueError('bounded command preflight cannot replace an active process alarm')
         from harness.decisions import native_record_batch
         self.batch = native_record_batch()
         self.batch.__enter__()
@@ -89,27 +94,31 @@ class Preflight:
             remaining = self.deadline-time.monotonic()
             if remaining <= 0:
                 self._expired(None,None)
-            signal.signal(signal.SIGALRM, self._expired)
             self.armed = True
-            signal.setitimer(signal.ITIMER_REAL, remaining)
+            if self.mode == 'SIGNAL':
+                signal.signal(signal.SIGALRM, self._expired)
+                signal.setitimer(signal.ITIMER_REAL, remaining)
             return self
         except BaseException:
             self.stop_checks()
-            signal.signal(signal.SIGALRM,self.previous_handler)
-            signal.setitimer(signal.ITIMER_REAL,*self.previous_timer)
+            if self.mode == 'SIGNAL':
+                signal.signal(signal.SIGALRM,self.previous_handler)
+                signal.setitimer(signal.ITIMER_REAL,*self.previous_timer)
             _current.reset(self.token)
             self.batch.__exit__(None,None,None)
             raise
 
     def stop_checks(self):
         if self.armed:
-            signal.setitimer(signal.ITIMER_REAL, 0)
+            if self.mode == 'SIGNAL':
+                signal.setitimer(signal.ITIMER_REAL, 0)
             self.armed = False
 
     def __exit__(self, kind, error, traceback):
         self.stop_checks()
-        signal.signal(signal.SIGALRM, self.previous_handler)
-        signal.setitimer(signal.ITIMER_REAL, *self.previous_timer)
+        if self.mode == 'SIGNAL':
+            signal.signal(signal.SIGALRM, self.previous_handler)
+            signal.setitimer(signal.ITIMER_REAL, *self.previous_timer)
         _current.reset(self.token)
         self.batch.__exit__(kind,error,traceback)
         if kind and issubclass(kind, PreflightTimeout):
@@ -129,6 +138,8 @@ class Preflight:
         except BaseException:
             raise
         else:
+            if self.armed and time.monotonic() >= self.deadline:
+                self._expired(None,None)
             self.emit('FINISHED', stage_elapsed_seconds=time.monotonic()-start)
 
 

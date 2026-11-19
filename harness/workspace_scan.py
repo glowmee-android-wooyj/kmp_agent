@@ -29,7 +29,9 @@ def paths(root, *, prune_generated=True):
     def failed(error):
         raise error
 
+    from harness.tracking_io import check_deadline
     for folder, directories, files in os.walk(root, topdown=True, followlinks=False, onerror=failed):
+        check_deadline()
         parent = Path(folder)
         kept = []
         for name in sorted(directories):
@@ -47,6 +49,7 @@ def paths(root, *, prune_generated=True):
             kept.append(name)
         directories[:] = kept
         for name in sorted(files):
+            check_deadline()
             path = parent / name
             relative = path.relative_to(root)
             if (name not in {'.DS_Store', '.git', '.harness', '__pycache__'}

@@ -77,13 +77,17 @@ def _locked(root,blocking=True,timeout=None,kind='writer'):
     _mkdir(base)
     with (base/'lock').open('a+b') as handle:
         if timeout is None:
-            try: fcntl.flock(handle,fcntl.LOCK_EX|(0 if blocking else fcntl.LOCK_NB))
+            try:
+                from harness.tracking_io import bounded_flock
+                bounded_flock(handle, fcntl.LOCK_EX|(0 if blocking else fcntl.LOCK_NB))
             except BlockingIOError:
                 yield None
                 return
         else:
             deadline=time.monotonic()+timeout
             while True:
+                from harness.tracking_io import check_deadline
+                check_deadline()
                 try:
                     fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
                     break

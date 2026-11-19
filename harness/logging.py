@@ -115,7 +115,8 @@ class Logger:
         if not self.path.exists():
             return []
         with self.path.open("r+", encoding="utf-8") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            from harness.tracking_io import bounded_flock
+            bounded_flock(handle)
             durable_events.recover_locked(self.path, handle)
             handle.seek(0)
             return [json.loads(line) for line in handle if line.strip()]
@@ -139,7 +140,8 @@ class Logger:
         Per-response events remain distinct. Durable outbox replay is idempotent.
         """
         with self.path.open("a+", encoding="utf-8") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            from harness.tracking_io import bounded_flock
+            bounded_flock(handle)
             durable_events.recover_locked(self.path, handle)
             handle.seek(0)
             existing = [json.loads(line) for line in handle if line.strip()]
@@ -278,7 +280,8 @@ class Logger:
         if not self.path.exists():
             return 0
         with self.path.open("r+", encoding="utf-8") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            from harness.tracking_io import bounded_flock
+            bounded_flock(handle)
             durable_events.recover_locked(self.path, handle)
             handle.seek(0)
             events = [json.loads(line) for line in handle if line.strip()]

@@ -45,18 +45,27 @@ def native_records(path, session_id):
         raise ValueError('root native session must reside in the fixed user native session store')
     if str(uuid.UUID(session_id)) != session_id:
         raise ValueError('canonical root session UUID required')
+    if not path.is_file():
+        raise ValueError('native root session must be a regular file')
+    from harness.tracking_io import check_deadline
+    check_deadline()
     raw = path.read_bytes()
+    check_deadline()
     complete = raw[:raw.rfind(b'\n') + 1]
     batch = _native_batch.get()
     key = (str(path), session_id, hashlib.sha256(complete).digest())
     if batch is not None and batch.get('key') == key:
         records = batch['records']
     else:
-        records = [json.loads(line) for line in complete.splitlines()]
+        records = []
+        for index, line in enumerate(complete.splitlines()):
+            if index % 256 == 0:check_deadline()
+            records.append(json.loads(line))
         if batch is not None and len(complete) <= 128 * 1024 * 1024:
             # Private readers in this query treat parsed records as read-only.
             batch.clear()
             batch.update(key=key, records=records)
+    check_deadline()
     metas = [r.get('payload', {}) for r in records if r.get('type') == 'session_meta']
     if len(metas) != 1 or metas[0].get('id') != session_id:
         raise ValueError('native root session UUID mismatch')
