@@ -302,7 +302,7 @@ def managed_command(manager, task_id, argv, cwd, timeout=None, text=True,
     child = None
     try:
         with preflight_stage('process_launch'):
-            budget.stop_checks()
+            budget.before_spawn()
             try:
                 child = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text,
                                          start_new_session=True)

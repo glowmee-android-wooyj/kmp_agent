@@ -108,6 +108,11 @@ class Preflight:
             self.batch.__exit__(None,None,None)
             raise
 
+    def before_spawn(self):
+        if self.armed and time.monotonic() >= self.deadline:
+            self._expired(None, None)
+        self.stop_checks()
+
     def stop_checks(self):
         if self.armed:
             if self.mode == 'SIGNAL':

@@ -446,7 +446,7 @@ class Logger:
                 proc = managed_command(managed, task_id, command, cwd, text=False, on_spawn=spawned)
             else:
                 with stage('process_launch'):
-                    budget.stop_checks()
+                    budget.before_spawn()
                     child = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 try:
                     spawned(child)

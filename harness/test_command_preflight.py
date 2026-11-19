@@ -171,6 +171,32 @@ class CommandPreflightTests(unittest.TestCase):
         self.assertEqual(self.diagnostics()[-1]['state'],'TIMED_OUT')
         self.assertEqual(self.diagnostics()[-1]['deadline_mode'],'COOPERATIVE')
 
+    def test_worker_rechecks_deadline_after_launch_diagnostic(self):
+        emit = Preflight.emit
+        errors = []
+
+        def expire_after_launch_diagnostic(budget, state, **extra):
+            emit(budget, state, **extra)
+            if budget.name == 'process_launch' and state == 'STARTED':
+                budget.deadline = budget.started
+
+        def invoke():
+            try:
+                self.command()
+            except Exception as error:
+                errors.append(error)
+
+        with patch.object(Preflight, 'emit', expire_after_launch_diagnostic), \
+                patch('harness.execution_policy.subprocess.Popen') as spawn:
+            worker = threading.Thread(target=invoke)
+            worker.start()
+            worker.join(2)
+            spawn.assert_not_called()
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], PreflightTimeout)
+        self.assertIn('process_launch', str(errors[0]))
+
     def test_invalid_deadlines_fail_before_any_spawn(self):
         for value in (0,-1,float('inf'),float('nan'),True,'60'):
             with self.subTest(value=value),self.assertRaises(ValueError):
