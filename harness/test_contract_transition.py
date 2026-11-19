@@ -91,6 +91,14 @@ class ApprovedContractTransition(unittest.TestCase):
         self.assertEqual(len(current['executions']),1)
         ensure(self.m,self.m.read(),current,'dispatch',current['executions'][0])
 
+    def test_transition_proof_survives_event_flush_before_outbox_clear(self):
+        link = self.transition()
+        state = self.m.read()
+        event = next(event for event in self.m.logger.read()
+                     if event.get('source_key') == 'contract-transition:' + link['id'])
+        state['outbox'].append(event)
+        self.assertIsNotNone(validate_answer(state, 'T2', self.root))
+
     def test_transition_can_submit_and_begin_review_on_preserved_attempt(self):
         self.transition()
         self.m.resume('T',self.work['agent_run_id'],'scope.md')

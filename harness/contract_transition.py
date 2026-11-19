@@ -21,7 +21,10 @@ def records(root, state, task):
     if not task.get('contract_transitions'):
         return []
     from harness.logging import Logger
-    events = Logger(root).read() + state.get('outbox', [])
+    events = Logger(root).read()
+    persisted_keys = {event.get('source_key') for event in events}
+    events.extend(event for event in state.get('outbox', [])
+                  if event.get('source_key') not in persisted_keys)
     result = []
     for link in task.get('contract_transitions', []):
         ref = link['proof']

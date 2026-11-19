@@ -23,7 +23,7 @@ PRODUCT의 `require_review()`는 구조 비교가 통과해도 인간 권한이 
 
 ## 승인된 기술 계약을 기존 시도에 전환
 
-T1 입력에 연결된 작업에서 정확한 T2 제안을 먼저 승인한 경우 `transition-approved-contract`를 사용한다. 새 동의를 받거나 기존 질문의 `decision_contract`·개설 checkpoint·native 응답을 수정하지 않는다. 동일 목적의 이전 질문을 대체한다면 T2 질문에 이미 등록된 명시적 `supersedes_question_id` 연결을 사용한다. 전환 명령이 승인 체인을 새로 만들지는 않는다. 아직 적용하지 않은 후보 파일은 일반 계보 JSON 또는 `{"target_path":"requirement-lineage.json","after":{...}}` 형식이며, 후보의 `human_authorization`은 해당 승인과 대상 작업을 가리킨다.
+v0.4.12부터 T1 입력에 연결된 작업에서 정확한 T2 제안을 먼저 승인한 경우 `transition-approved-contract`를 사용한다. 새 동의를 받거나 기존 질문의 `decision_contract`·개설 checkpoint·native 응답을 수정하지 않는다. 동일 목적의 이전 질문을 대체한다면 T2 질문에 이미 등록된 명시적 `supersedes_question_id` 연결을 사용한다. 전환 명령이 승인 체인을 새로 만들지는 않는다. 아직 적용하지 않은 후보 파일은 일반 계보 JSON 또는 `{"target_path":"requirement-lineage.json","after":{...}}` 형식이며, 후보의 `human_authorization`은 해당 승인과 대상 작업을 가리킨다.
 
 ```json
 {
@@ -43,7 +43,7 @@ rtk proxy python3 .kmp-agent/agent.py task --run-id ORIGINAL_RUN --operation tra
 
 동일 파일을 `APPROVED_REQUIREMENTS`와 `AGENT_DERIVED`에 연결한 후보도 전체 subject와 파일 해시의 정확한 native 승인이 있을 때만 허용한다. `USER_ORIGINAL`과 파생 출처의 중복은 계속 거부한다.
 
-원래 checkpoint가 있는 `BLOCKED` work 시도와 현재 native 루트 연결이 필요하다. 정확한 승인 subject·출처 파일 해시·현재 T1 입력을 검증하고 실제로 달라진 기술 정책·관련 파생 항목·기술 출처만 전환한다. 비기술 요구·원본 출처·기존 변경 결정·설정 및 P/D/API 기준·코드 범위는 보존한다. 현재 계보 파일과 동결 작업 입력·기술 계약은 하나의 복구 가능한 트랜잭션으로 반영한다. 기존 실행의 시작 입력·baseline·승인 기록은 보존하고 전후 연결 근거를 추가한다. 후보나 파일이 승인 범위와 다르면 canonical 파일을 바꾸지 않고 거부한다.
+원래 checkpoint가 있는 `BLOCKED` work 시도와 현재 native 루트 연결이 필요하다. 기존 executor가 있다면 소유권이 최종 해제되고 자식 프로세스 종료가 확인되어야 한다. 정확한 승인 subject·출처 파일 해시·현재 T1 입력을 검증하고 실제로 달라진 기술 정책·관련 파생 항목·기술 출처만 전환한다. 비기술 요구·원본 출처·기존 변경 결정·설정 및 P/D/API 기준·코드 범위는 보존한다. 현재 계보 파일과 동결 작업 입력·기술 계약은 하나의 복구 가능한 트랜잭션으로 반영한다. 기존 실행의 시작 입력·baseline·승인 기록은 보존하고 전후 연결 근거를 추가한다. 후보나 파일이 승인 범위와 다르면 canonical 파일을 바꾸지 않고 거부한다.
 
 트랜잭션 도중 중단되면 하네스의 일반 작업 조회·변경은 미완료 journal 때문에 차단된다. 로컬 `.harness/contract-transition-transactions/txn-*/journal.json`에서 중단된 transaction ID를 확인하고 `recovery.json`에 `transaction_id`와 `reason`을 제공한다.
 
@@ -53,7 +53,7 @@ rtk proxy python3 .kmp-agent/agent.py task --run-id ORIGINAL_RUN --operation rec
 
 이 명령은 미완료 전환을 전환 전 상태로 복구한다. 알 수 없는 파일 변경이나 손상된 복구 snapshot은 덮어쓰지 않는다. 이미 `COMMITTED`인 기록은 되돌리지 않는다. 복구 후에도 승인 원본·후보·현재 입력을 확인하고 전환을 다시 명시적으로 실행한다.
 
-전환은 작업을 자동 재개하거나 과거 QA를 새 계약의 PASS로 승격하지 않는다. 변경된 입력에 필요한 검증을 다시 수행하고 기존 `resume` 경로를 사용한다. 아직 승인하지 않은 변경은 위의 명시적 대체 승인 절차를 따른다. 이 기능은 미배포 변경이며 기존 설치본에는 자동 반영되지 않는다.
+전환은 작업을 자동 재개하거나 과거 QA를 새 계약의 PASS로 승격하지 않는다. 변경된 입력에 필요한 검증을 다시 수행하고 기존 `resume` 경로를 사용한다. 아직 승인하지 않은 변경은 위의 명시적 대체 승인 절차를 따른다. 이 기능은 v0.4.12부터 지원한다.
 
 전환 전에 만든 명령 continuation은 이전 입력 범위에 묶여 있으므로 새 계약에서 명령을 실행할 수 없다. 해당 명령 run이 열려 있다면 명령·자식 프로세스가 끝난 것을 확인하고 `finish --end-reason handoff`로 종료한다. 작업 재개 후 원래 task run에서 `continue-command-run`의 `previous_run_id`에 그 마지막 명령 run을 지정해 새 범위로 연결한다. [종료된 상위 실행 뒤 명령 로그 연결](execution-policy.md#종료된-상위-실행-뒤-명령-로그-이어가기)을 따르며 기존 명령 기록은 보존한다.
 
