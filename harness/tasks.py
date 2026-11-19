@@ -77,7 +77,7 @@ class Tasks:
         # A live writer settles normally; only an abandoned journal needs recovery.
         # Wait for integration before taking the ledger lock, so a live writer
         # cannot consume another reader's shorter ledger-lock deadline.
-        with read_barrier(self.root), state_lock(self.root, self.directory / "state.lock", action):
+        with read_barrier(self.root, action=action), state_lock(self.root, self.directory / "state.lock", action):
             state = json.loads(self.path.read_text()) if self.path.exists() else {"schema_version": 1, "tasks": {}, "outbox": []}
             from harness.protected_verification import validate_ledger
             validate_ledger(self.root, state, allow_registration=action in {'register','register_execution_plan'})

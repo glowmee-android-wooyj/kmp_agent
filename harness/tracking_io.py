@@ -92,6 +92,29 @@ def bounded_flock(handle, operation=fcntl.LOCK_EX):
             time.sleep(.01)
 
 
+class LockWaitTimeout(TimeoutError):
+    def __init__(self, root, path, action, started):
+        lock_path = Path(path).relative_to(root)
+        try:
+            with Path(str(path) + '.owner.json').open() as stream:
+                owner = json.loads(stream.read(4096))
+            hint = (f"{owner['state']} pid={owner['pid']} action={owner['action']} "
+                    f"recorded_at={owner['recorded_at']:.3f} (unverified)")
+        except (OSError, ValueError, KeyError, TypeError):
+            hint = 'unknown'
+        super().__init__(f'{lock_path} timed out after {time.monotonic() - started:.3f}s '
+                         f'while waiting for {action}; last owner record: {hint}')
+
+
+def record_lock_owner(path, action, state):
+    from harness.incremental_sync import atomic_json
+    try:
+        atomic_json(Path(str(path) + '.owner.json'), dict(
+            pid=os.getpid(), action=action, state=state, recorded_at=time.time()))
+    except OSError:
+        pass  # Diagnostics cannot change lock ownership or dispatch results.
+
+
 @contextmanager
 def state_lock(root, path, action):
     start=time.monotonic();trace(root,'state_lock_wait',action=action)
@@ -102,10 +125,13 @@ def state_lock(root, path, action):
             except BlockingIOError:
                 if time.monotonic()-start>=LOCK_TIMEOUT_SECONDS:
                     trace(root,'state_lock_timeout',action=action,wait_seconds=time.monotonic()-start)
-                    raise TimeoutError('task state lock timed out; no stale status or mutation returned')
+                    raise LockWaitTimeout(root, path, action, start)
                 time.sleep(.01)
         acquired=time.monotonic();trace(root,'state_lock_acquired',action=action,wait_seconds=acquired-start)
-        try:yield
+        try:
+            record_lock_owner(path, action, 'HELD')
+            yield
         finally:
+            record_lock_owner(path, action, 'RELEASED')
             fcntl.flock(handle,fcntl.LOCK_UN)
             trace(root,'state_lock_released',action=action,held_seconds=time.monotonic()-acquired)

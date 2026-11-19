@@ -62,7 +62,7 @@ def _journal(folder,record):
 
 
 @contextmanager
-def _locked(root,blocking=True,timeout=None,kind='writer'):
+def _locked(root,blocking=True,timeout=None,kind='writer',action=None):
     base = _base(root); key=str(base)
     held=getattr(_local,'held',None)
     if held is None: held={}; _local.held=held
@@ -75,7 +75,10 @@ def _locked(root,blocking=True,timeout=None,kind='writer'):
             return
         raise RuntimeError('integration operation cannot nest inside active '+held[key]+' lock')
     _mkdir(base)
-    with (base/'lock').open('a+b') as handle:
+    from harness.tracking_io import LockWaitTimeout, record_lock_owner
+    path = base / 'lock'
+    action = action or kind
+    with path.open('a+b') as handle:
         if timeout is None:
             try:
                 from harness.tracking_io import bounded_flock
@@ -84,7 +87,8 @@ def _locked(root,blocking=True,timeout=None,kind='writer'):
                 yield None
                 return
         else:
-            deadline=time.monotonic()+timeout
+            started = time.monotonic()
+            deadline = started + timeout
             while True:
                 from harness.tracking_io import check_deadline
                 check_deadline()
@@ -93,17 +97,20 @@ def _locked(root,blocking=True,timeout=None,kind='writer'):
                     break
                 except BlockingIOError:
                     if time.monotonic()>=deadline:
-                        raise TimeoutError('integration read barrier timed out; no task progress permitted')
+                        raise LockWaitTimeout(root, path, action, started)
                     time.sleep(.01)
         held[key]=kind
-        try: yield base
+        try:
+            record_lock_owner(path, action, 'HELD')
+            yield base
         finally:
+            record_lock_owner(path, action, 'RELEASED')
             held.pop(key,None)
             fcntl.flock(handle,fcntl.LOCK_UN)
 
 
 @contextmanager
-def read_barrier(root,timeout=None):
+def read_barrier(root,timeout=None,*,action=None):
     """Hold a consistent integration view through ledger refresh/gate/save.
 
     This waits for the physical writer, never rolls it back, and fails closed on
@@ -124,7 +131,7 @@ def read_barrier(root,timeout=None):
                 pass
     if not isinstance(timeout,(int,float)) or not math.isfinite(timeout) or timeout<0:
         raise ValueError('nonnegative integration barrier timeout required')
-    with _locked(root,timeout=timeout,kind='read'):
+    with _locked(root,timeout=timeout,kind='read',action=action):
         from harness.contract_transition_transaction import unresolved as transition_unresolved
         if transition_unresolved(root):
             raise ValueError('unresolved contract transition transaction; explicit recovery required')
