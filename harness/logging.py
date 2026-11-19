@@ -13,6 +13,13 @@ import sys
 import time
 import uuid
 
+ROOT = Path(__file__).resolve().parents[1]
+if not __package__:
+    # Legacy file entrypoints also run outside this checkout. Keep package
+    # helpers importable without shadowing Python's stdlib logging module.
+    sys.path[:] = [p for p in sys.path if Path(p or '.').resolve() != ROOT / 'harness']
+    sys.path.insert(0, str(ROOT))
+
 # Support both package imports and direct file loading.
 try:
     from harness import durable_events
@@ -24,7 +31,6 @@ except ModuleNotFoundError:
 UNKNOWN = "UNKNOWN"
 KINDS = ("HARNESS_BUILD", "HARNESS_IMPROVEMENT", "PRODUCT")
 INTERVENTION_CLASSES = {"REQUIREMENT_CHANGE", "CORRECTION", "STATUS_OR_EXPLANATION", UNKNOWN}
-ROOT = Path(__file__).resolve().parents[1]
 SENSITIVE_KEY = re.compile(r"^(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|passwd|client[_-]?secret|secret|cookie|set-cookie)$", re.I)
 
 
