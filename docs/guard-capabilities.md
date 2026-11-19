@@ -84,7 +84,7 @@ v0.4.2의 이미 설치된 guard에는 이 지원이 소급 반영되지 않는�
 
 실제 `collaboration.spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `list_agents`, `interrupt_agent` 이름과 기존 bare 이름을 지원한다. 호출 자체는 제품 쓰기 권한이 아니다. 자식 실행도 해당 소스·세션 계약을 충족해야 한다. 임의 orchestration JavaScript인 `functions.exec`/`exec`는 읽기로 취급하지 않는다. 중첩 호출별 훅 전달을 입증하지 않은 실행기를 포괄 허용하지 않는다.
 
-v0.4.6에서는 훅이 실제 전달한 `collaborationspawn_agent`와 같은 namespace+method 연결 표기를 위 여섯 동작의 정확한 별칭으로 지원한다. 임의 이름의 구분자를 제거해 추정하지 않는다. 웹 조회 도구의 정확한 `web.run`, `web__run`, `webrun`도 제품 원장과 독립된 외부 자료 조회로 지원한다. 이는 파일 쓰기·임의 JavaScript·브라우저 UI 조작 허가가 아니다. v0.4.6의 현재 세션 진단은 정확히 `printenv CODEX_THREAD_ID`와 `ps -axo pid,args`이며, 아래 미배포 보완은 명시 PID의 제한된 성능 조회만 추가한다. 전체 환경변수 출력이나 임의 프로세스 옵션을 포괄 허용하지 않는다. 조회 결과는 인증·native 원본 연결을 대체하지 않는다.
+v0.4.6에서는 훅이 실제 전달한 `collaborationspawn_agent`와 같은 namespace+method 연결 표기를 위 여섯 동작의 정확한 별칭으로 지원한다. 임의 이름의 구분자를 제거해 추정하지 않는다. 웹 조회 도구의 정확한 `web.run`, `web__run`, `webrun`도 제품 원장과 독립된 외부 자료 조회로 지원한다. 이는 파일 쓰기·임의 JavaScript·브라우저 UI 조작 허가가 아니다. v0.4.6의 현재 세션 진단은 정확히 `printenv CODEX_THREAD_ID`와 `ps -axo pid,args`이며, 아래 v0.4.13 보완은 명시 PID의 제한된 성능 조회만 추가한다. 전체 환경변수 출력이나 임의 프로세스 옵션을 포괄 허용하지 않는다. 조회 결과는 인증·native 원본 연결을 대체하지 않는다.
 
 Markdown 또는 `docs/*.json` 확장자만으로 patch를 허용하지 않는다. 준비 인자 JSON 객체는 역할이 고정된 `docs/guard-inputs/` 아래에서 작성한다. 이 namespace는 설정·명령 인자 초안용이며 제품 실행 자원으로 사용하지 않는다. 다른 문서는 TODO/READY에서 `task --operation configure-documents`로 `task_id`, 정확한 `paths`, `reason`을 한 번 등록한다. 세션 계획에 포함된 IN_PROGRESS `execution_scope: documentation` 작업의 열린 work 실행에서 그 경로만 편집한다. JSON 인자 초안과 문서 경로가 어느 등록 작업의 `code_paths`와 겹쳐도 준비·문서 예외를 적용하지 않는다. lineage 초안 수정도 같은 범위 계약을 사용하며 실제 승인 검사는 기존 생명주기에 남는다.
 
@@ -94,7 +94,7 @@ v0.4.6은 `role: design`, `execution_scope: documentation` 작업의 명시 경�
 
 ## 명령 실행 전 프로세스 진단
 
-미배포 보완은 `ps`, `/bin/ps`, `/usr/bin/ps`의 정확한 실행 이름에 한해 기존 `-axo pid,args`와 아래 형식을 허용한다. `-p`는 양의 PID를 최대 32개까지 쉼표로 명시하고, `-o`는 `pid`, `ppid`, `pgid`, `stat`, `state`, `etime`, `time`, `%cpu`, `%mem`, `args`, `command`, `comm` 중 중복 없는 열만 지정한다.
+[v0.4.13 보완](releases/v0.4.13.md)은 `ps`, `/bin/ps`, `/usr/bin/ps`의 정확한 실행 이름에 한해 기존 `-axo pid,args`와 아래 형식을 허용한다. `-p`는 양의 PID를 최대 32개까지 쉼표로 명시하고, `-o`는 `pid`, `ppid`, `pgid`, `stat`, `state`, `etime`, `time`, `%cpu`, `%mem`, `args`, `command`, `comm` 중 중복 없는 열만 지정한다.
 
 ```sh
 /bin/ps -p 123,456 -o pid,ppid,stat,etime,time,%cpu,command

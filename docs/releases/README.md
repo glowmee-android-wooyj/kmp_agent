@@ -20,6 +20,7 @@
 | `v0.4.10` / VERSION `0.4.10` | [0.4.10 지원 범위](v0.4.10.md) · [본문 원본](v0.4.10-notes.md) | PR #31: 원본 승인과 구현 진행 분리·기존 v1 승인 호환성. 최종 SHA·원격 검증·게시 결과는 [GitHub Release](https://github.com/wooyj-1217/kmp_agent/releases/tag/v0.4.10)에서 확정 |
 | `v0.4.11` / VERSION `0.4.11` | [지원 범위](v0.4.11.md) · [본문 원본](v0.4.11-notes.md) | 중단 후 같은 시도의 빌드·테스트 재개. 최종 SHA·검증은 [GitHub Release](https://github.com/wooyj-1217/kmp_agent/releases/tag/v0.4.11)에서 확인 |
 | `v0.4.12` / VERSION `0.4.12` | [지원 범위](v0.4.12.md) · [본문 원본](v0.4.12-notes.md) | 기존 native 승인을 보존하는 기술 계약 전환과 복구 |
+| `v0.4.13` / VERSION `0.4.13` | [지원 범위](v0.4.13.md) · [본문 원본](v0.4.13-notes.md) | PR #35의 명령 사전 검사 기한과 실행 진단 |
 | `v0.5.0` 철회 완료 | [당시 지원 범위](v0.5.0.md) · [당시 본문 원본](v0.5.0-notes.md) | 2026-11-12 사용자 명시 요청으로 태그·Release 삭제 확인. 기존 커밋 이력·검증 원본 보존. 변경 사항은 v0.4.2에 포함하며 최종 배포 결과는 해당 Release에서 확인 |
 | 최초 작업본 조사(과거 기록) | [작업본](working-tree.md) | VERSION 0.1.0이던 최초 조사와 당시 해시를 보존. 배포 식별·게시 여부는 위 버전별 행 참조 |
 
