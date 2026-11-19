@@ -188,7 +188,7 @@ class InspectionTests(unittest.TestCase):
             self.assertTrue(entered.wait(2))
             with self.assertRaisesRegex(io.LockWaitTimeout,
                     rf'integration-transactions/lock timed out after .*dispatch.*HELD pid={os.getpid()} action=ledger_refresh'):
-                with read_barrier(self.root, timeout=.05, action='dispatch'):
+                with read_barrier(os.path.relpath(self.root), timeout=.05, action='dispatch'):
                     self.fail('contended lock was acquired')
         finally:
             release.set()

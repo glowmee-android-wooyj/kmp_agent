@@ -94,7 +94,8 @@ def bounded_flock(handle, operation=fcntl.LOCK_EX):
 
 class LockWaitTimeout(TimeoutError):
     def __init__(self, root, path, action, started):
-        lock_path = Path(path).relative_to(root)
+        path = Path(path)
+        lock_path = (path.parent.resolve() / path.name).relative_to(Path(root).resolve())
         try:
             with Path(str(path) + '.owner.json').open() as stream:
                 owner = json.loads(stream.read(4096))
