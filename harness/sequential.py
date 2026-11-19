@@ -41,6 +41,23 @@ def settings(root):
     return validate_settings(json.loads(path.read_text())) if path.exists() else None
 
 
+def named_command(root, name, argv, kind):
+    path = Path(root) / SETTINGS
+    if argv is not None or not path.is_file():
+        raise ValueError("choose an existing named command without explicit argv")
+    settings_bytes = path.read_bytes()
+    commands = validate_settings(json.loads(settings_bytes)).get("commands", {})
+    if name not in commands:
+        raise ValueError("choose an existing named command without explicit argv")
+    selected = commands[name]
+    if kind != UNKNOWN and kind != selected["kind"]:
+        raise ValueError("command kind conflicts with named configuration")
+    cwd = (Path(root) / selected.get("cwd", ".")).resolve()
+    if not cwd.is_relative_to(Path(root).resolve()) or not cwd.is_dir():
+        raise ValueError("command cwd must exist inside target project")
+    return selected["argv"], selected["kind"], cwd, log.digest(settings_bytes)
+
+
 def save_settings(root, data):
     data = validate_settings(data)
     path = Path(root) / SETTINGS

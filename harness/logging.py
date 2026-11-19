@@ -378,8 +378,9 @@ class Logger:
         if policy_state.get('execution_policy') and task_id not in policy_state.get('tasks', {}):
             raise ValueError('strict managed commands require an explicit planned task')
         with stage('run_state'):
-            if any(e["run_id"] == run_id and e["event_type"] == "run_finished" for e in self.read()):
-                raise ValueError("run already finished")
+            from harness.command_runs import require_open
+            require_open(self.root, run_id, task=policy_state.get('tasks', {}).get(task_id),
+                         records=self.read())
         execution_run_id = run_id
         if task_id != UNKNOWN and agent_run_id != UNKNOWN and attempt_id != UNKNOWN:
             from harness.command_runs import execution_run
@@ -397,22 +398,13 @@ class Logger:
         with stage('run_context'):
             start = self.run(run_id)
         sys.path.insert(0, str(ROOT))
-        from harness.sequential import command_context, validate_settings, KINDS
+        from harness.sequential import command_context, named_command, KINDS
         with stage('command_context'):
             context, binding = command_context(self.root, run_id, task_id, agent_run_id, attempt_id)
         cwd = self.root
         if command_name is not None:
-            config_path = self.root / ".harness/settings/sequential.json"
-            config_bytes = config_path.read_bytes() if config_path.exists() else None
-            config = validate_settings(json.loads(config_bytes)) if config_bytes is not None else None
-            if command or config is None or command_name not in config.get("commands", {}):
-                raise ValueError("choose an existing named command without explicit argv")
-            selected = config["commands"][command_name]
-            if command_kind != UNKNOWN and command_kind != selected["kind"]:
-                raise ValueError("command kind conflicts with named configuration")
-            command, command_kind = selected["argv"], selected["kind"]
-            cwd = (self.root / selected.get("cwd", ".")).resolve()
-            binding["command_settings_sha256"] = digest(config_bytes)
+            command, command_kind, cwd, binding["command_settings_sha256"] = named_command(
+                self.root, command_name, command, command_kind)
         if command_kind not in KINDS:
             raise ValueError("unsupported command kind")
         if not cwd.is_relative_to(self.root) or not cwd.is_dir():

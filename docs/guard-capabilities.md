@@ -102,6 +102,12 @@ v0.4.6은 `role: design`, `execution_scope: documentation` 작업의 명시 경�
 
 다른 실행 경로·추가 옵션·환경 열·사용자 지정 열 제목·음수 PID·복합 셸은 거부한다. 관측 조회이며 프로세스 종료·재실행 권한을 부여하지 않는다. 프로세스 목록에서 자식이 보이지 않는다는 관측만으로 모든 잠금이 해제됐다고 판단하지 않으며, [사전 검사 단계와 생성 근거](execution-policy.md#명령-실행-전-검사와-지연-진단)를 함께 확인한다. 실제 OS 권한에 따른 조회 실패는 이 guard 허용과 별개다.
 
+## 등록한 제품 명령 실행과 재개
+
+공식 `command`에서 `--command-name`을 쓰면 훅과 CLI가 같은 순차 수집 설정에서 argv와 실행 위치를 읽는다. 등록한 명령의 argv는 동결 기술 계약의 `target_commands`와 일치해야 한다. `--argv-json`으로 승인된 argv를 직접 지정하는 방식도 지원한다.
+
+같은 세션의 승인된 명령 호출에서 종료된 run을 지정하면 훅과 CLI가 run 종료 상태를 표시한다. 같은 구현 시도가 열려 있고 종료된 run이 최신 명령 run이면 `task --operation continue-command-run`을 안내한다. 이 작업에는 원래 구현 run을 `--run-id`로, 종료된 명령 run을 `previous_run_id`로 지정한다. 기존 승인과 구현 시도를 보존하는 검사 및 복구 입력은 [재개 절차](interruption-recovery.md#작업은-재개됐지만-상위-명령-run이-종료된-경우)를 따른다.
+
 ## 독립 QA·UI 검증
 
 `command`는 활성 구현 외에도 native verification review 또는 독립 verification 작업을 지원한다. 같은 세션·계획 소속·검증 역할·구현자와 다른 actor·동결 대상 상태·원본 `target_commands`와 일치하는 argv를 요구한다. QA는 기존 `qa_config`의 명령·target manifest를 함께 검사한다. 완료 뒤 재검증은 native certification review 또는 새 QA 작업으로 실행하며 DONE 이력을 직접 수정하지 않는다.

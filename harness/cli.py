@@ -179,9 +179,15 @@ def main():
                     if args.action == 'task' else
                     "Use recover for an interrupted update; inspect source/ref, preserved settings and hook diagnostics.")
         if args.action == 'command':
-            recovery = ("Inspect .harness/logs/command-preflight/<call_id>.jsonl for the last timed stage. "
-                        "Keep the existing approval, task and attempt; retry only after a clean pre-spawn abort, "
-                        "or use official task recovery if process ownership is uncertain.")
+            from harness.command_runs import CommandRunFinished
+            if isinstance(error, PreflightTimeout):
+                recovery = ("Inspect .harness/logs/command-preflight/<call_id>.jsonl for the last timed stage. "
+                            "Keep the existing approval, task and attempt; retry only after a clean pre-spawn abort, "
+                            "or use official task recovery if process ownership is uncertain.")
+            elif isinstance(error, CommandRunFinished):
+                recovery = str(error)
+            else:
+                recovery = "Check the reported error, current task state and command --help before retrying."
         print(json.dumps({**context, "result": "FAIL", "error_type": type(error).__name__,
                           "cause": str(error) if isinstance(error, (ValueError, PreflightTimeout)) else "Tool configuration operation failed",
                           "recovery": recovery}, ensure_ascii=False))
