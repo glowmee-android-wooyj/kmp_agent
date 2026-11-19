@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import threading
 import time
@@ -97,8 +98,14 @@ class LockWaitTimeout(TimeoutError):
         path = Path(path)
         lock_path = (path.parent.resolve() / path.name).relative_to(Path(root).resolve())
         try:
-            with Path(str(path) + '.owner.json').open() as stream:
-                owner = json.loads(stream.read(4096))
+            owner_path = path.with_name(path.name + '.owner.json')
+            fd = os.open(owner_path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise ValueError('lock owner record must be a regular file')
+                owner = json.loads(os.read(fd, 4096))
+            finally:
+                os.close(fd)
             hint = (f"{owner['state']} pid={owner['pid']} action={owner['action']} "
                     f"recorded_at={owner['recorded_at']:.3f} (unverified)")
         except (OSError, ValueError, KeyError, TypeError):
