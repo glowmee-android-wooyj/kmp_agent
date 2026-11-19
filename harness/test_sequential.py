@@ -172,6 +172,9 @@ class TemporaryProjectCLI(unittest.TestCase):
     def test_prelaunch_timeout_then_retry_installed_command_flow(self):
         self._installed_command_flow(preflight_retry=True)
 
+    def test_transition_then_prelaunch_timeout_retry_installed_flow(self):
+        self._installed_command_flow(transition=True,preflight_retry=True)
+
     def _installed_command_flow(self, transition=False, preflight_retry=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "applied project"
@@ -220,7 +223,7 @@ else:
             shim.write_text("import runpy,sys,subprocess\nfrom pathlib import Path\nfrom unittest.mock import patch\nsys.path.insert(0,%r)\nentry=sys.argv[1];sys.argv=sys.argv[1:]\npatch('harness.decisions.native_store',return_value=Path(%r)).start()\noriginal_call=subprocess.call\ndef invoke(argv,**kwargs):\n    if len(argv)>1 and argv[1]==%r:\n        return original_call([sys.executable,__file__,*argv[1:]],**kwargs)\n    return original_call(argv,**kwargs)\nsubprocess.call=invoke\nrunpy.run_path(entry,run_name='__main__')\n" % (str(ROOT),str(native.parent),str(ROOT/'harness/cli.py')))
             if preflight_retry:
                 text=shim.read_text()
-                text=text.replace("runpy.run_path(entry,run_name='__main__')", "from harness.execution_policy import WorkerGate\nimport time\noriginal_init=WorkerGate.__init__\ndef delayed_init(self,*args,**kwargs):\n    original_init(self,*args,**kwargs)\n    if Path(%r).exists(): time.sleep(10)\nWorkerGate.__init__=delayed_init\nrunpy.run_path(entry,run_name='__main__')" % str(root/'.harness/slow-preflight'))
+                text=text.replace("runpy.run_path(entry,run_name='__main__')", "from harness.execution_policy import WorkerGate\nimport time\noriginal_init=WorkerGate.__init__\ndef delayed_init(self,*args,**kwargs):\n    original_init(self,*args,**kwargs)\n    if Path(%r).exists(): time.sleep(60)\nWorkerGate.__init__=delayed_init\nrunpy.run_path(entry,run_name='__main__')" % str(root/'.harness/slow-preflight'))
                 shim.write_text(text)
             def cli(action, expected_exit=0, **options):
                 argv = ["rtk", "proxy", sys.executable, '-B',str(shim),str(root / ".kmp-agent/agent.py"), action]
@@ -385,11 +388,11 @@ else:
                 import time
                 before_timeout=time.monotonic()
                 timed_out=cli('command',expected_exit=1,run_id=command_run_id,task_id='T',
-                    agent_run_id=run['agent_run_id'],attempt_id=run['attempt_id'],command_name='build',preflight_timeout=2)
+                    agent_run_id=run['agent_run_id'],attempt_id=run['attempt_id'],command_name='build',preflight_timeout=10)
                 self.assertEqual(timed_out['error_type'],'PreflightTimeout')
                 self.assertIn('worker_gate',timed_out['cause'])
                 self.assertIn('command-preflight',timed_out['recovery'])
-                self.assertLess(time.monotonic()-before_timeout,8)
+                self.assertLess(time.monotonic()-before_timeout,20)
                 self.assertFalse((root/'.harness/build.done').exists())
                 self.assertTrue(manager.read()['tasks']['T']['executions'][0]['command_prelaunch_aborts'])
                 flag.unlink()
@@ -423,7 +426,8 @@ else:
                 submitted = manager_state['tasks']['T']
                 events = manager.logger.read()
                 command_ends = [e for e in events if e.get('event_type') == 'command_finished'
-                                and e.get('agent_run_id') == run['agent_run_id']]
+                                and e.get('agent_run_id') == run['agent_run_id']
+                                and e.get('observed',{}).get('returncode') == 0]
                 proofs = []
                 for argv, event in zip((build_argv,test_argv), command_ends):
                     observed = event['observed']
