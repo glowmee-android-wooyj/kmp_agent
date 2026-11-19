@@ -308,7 +308,7 @@ def _refresh(manager, state):
                             ref = row['evidence']
                             if not manager._valid_artifact(ref):
                                 raise ValueError('development constraint review proof missing')
-                            constraints_review(manager, task, json.loads((manager.root / ref['snapshot']).read_text()))
+                            constraints_review(manager, task, json.loads((manager.root / ref['snapshot']).read_text()), state=state)
             except (ValueError, OSError, KeyError, TypeError):
                 reasons.append("current code/contract impact cannot be established")
             key = review["agent_run_id"]
@@ -524,7 +524,8 @@ def ensure(manager, state, task, phase, run=None):
             raise ValueError("development tracking missing: execution baseline/code_state_start")
         if run["code_state_start"]["repository_root"] != str(manager.root):
             raise ValueError("execution target repository mismatch")
-        if run["baseline"] != baseline(task):
+        from harness.contract_transition import effective_baseline
+        if effective_baseline(manager.root, state, task, run) != baseline(task):
             raise ValueError("execution input baseline changed")
     if phase in {"begin_review", "review", "handoff_source"}:
         submitted = [r for r in task["executions"] if r["kind"] == "work" and r.get("outputs") == task["outputs"] and r.get("ended_at")]
@@ -533,7 +534,8 @@ def ensure(manager, state, task, phase, run=None):
         work = submitted[-1]
         if not work.get("code_state_start") or not work.get("code_state_result") or not work.get("baseline") or not task.get("submission_code_state"):
             raise ValueError("development tracking missing: work start/submission evidence")
-        if work["baseline"] != baseline(task) or work["code_state_result"] != task["submission_code_state"]:
+        from harness.contract_transition import effective_baseline
+        if effective_baseline(manager.root, state, task, work) != baseline(task) or work["code_state_result"] != task["submission_code_state"]:
             raise ValueError("development submission baseline/code state mismatch")
     if phase == "handoff_source":
         review = task["reviews"][-1] if task["reviews"] else {}

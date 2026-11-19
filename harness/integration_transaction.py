@@ -70,7 +70,7 @@ def _locked(root,blocking=True,timeout=None,kind='writer'):
         if kind=='recover':
             yield None
             return
-        if kind=='read' and held[key]=='read':
+        if kind=='read' and held[key] in {'read', 'contract_transition'}:
             yield base
             return
         raise RuntimeError('integration operation cannot nest inside active '+held[key]+' lock')
@@ -121,6 +121,9 @@ def read_barrier(root,timeout=None):
     if not isinstance(timeout,(int,float)) or not math.isfinite(timeout) or timeout<0:
         raise ValueError('nonnegative integration barrier timeout required')
     with _locked(root,timeout=timeout,kind='read'):
+        from harness.contract_transition_transaction import unresolved as transition_unresolved
+        if transition_unresolved(root):
+            raise ValueError('unresolved contract transition transaction; explicit recovery required')
         yield
 
 
@@ -289,6 +292,9 @@ def apply(root,changes,expected_source,transaction_id,baseline=None,fault_hook=N
     if not changes or set(changes)!=set(expected_source): raise ValueError('exact integration source map required')
     with _locked(root) as base:
         if unresolved(root): raise ValueError('unresolved integration transaction; explicit recovery required')
+        from harness.contract_transition_transaction import unresolved as transition_unresolved
+        if transition_unresolved(root):
+            raise ValueError('unresolved contract transition transaction; explicit recovery required')
         folder = base/('txn-'+_sha(str(transaction_id).encode()))
         if folder.exists():
             previous = _read(folder)

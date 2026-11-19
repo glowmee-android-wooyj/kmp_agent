@@ -496,6 +496,16 @@ class Tasks:
                         observed={"checkpoint": ref, "reason": reason, "from": "IN_PROGRESS", "to": "BLOCKED"})
         return self._mutate("checkpoint", operation, task_id)
 
+    def transition_approved_contract(self, task_id, agent_run_id, question_id, candidate,
+                                     before_sha256, reason, evidence):
+        from harness.contract_transition import transition
+        return transition(self, task_id, agent_run_id, question_id, candidate,
+                          before_sha256, reason, evidence)
+
+    def recover_contract_transition(self, transaction_id, reason):
+        from harness.contract_transition_transaction import recover
+        return recover(self, transaction_id, reason)
+
     def continue_command_run(self, task_id, agent_run_id, previous_run_id, reason, evidence):
         from harness.command_runs import continue_run
         return continue_run(self, task_id, agent_run_id, previous_run_id, reason, evidence)
@@ -590,7 +600,8 @@ class Tasks:
                 from harness.development_tracking import validate_baseline
                 validate_baseline(self, state, task)
                 check_peers(state, task)
-                if baseline(task) != run["baseline"]:
+                from harness.contract_transition import effective_baseline
+                if baseline(task) != effective_baseline(self.root, state, task, run):
                     raise ValueError("execution input baseline changed")
                 paths = task["development_tracking"]["code_paths"]
                 if paths and any(not any(r["path"] == p or r["path"].startswith(p + "/") for p in paths) for r in refs):
@@ -708,7 +719,7 @@ class Tasks:
             passed = passed and (not task["visual_required"] or task["design_status"]["visual_review"] == "PASS")
             passed = passed and (task["role"] != "design" or task["design_status"]["specification"] == "COMPLETE")
             from harness.project_contract import review_gate
-            review_gate(self, task, checked)
+            review_gate(self, task, checked, state=state)
             from harness.stage_readiness import gate as readiness_gate,review_basis
             reason=readiness_gate(self,state,task,checked)
             if reason:raise ValueError(reason)
@@ -1025,7 +1036,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=logging.ROOT)
     parser.add_argument("--run-id", default=UNKNOWN)
-    parser.add_argument("action", choices=["bind-execution-session", "configure-execution-policy", "configure-task-plan", "open-question", "answer-question", "recover-question", "question-status", "register", "register-execution-plan", "revise-execution-plan", "configure-verification", "configure-completion", "configure-documents", "configure-verification-capabilities", "record-context-maintenance", "configure-development", "refresh-validation", "configure-stage", "configure-stage-workflow", "bind-stage-inputs", "return-to-stage", "configure-delegation", "configure-runtime-limits", "configure-qa", "configure-collection", "collection-report", "integration", "ready", "begin", "submit", "review", "handoff", "checkpoint", "resume", "continue-command-run", "fail", "issue", "route-issue", "resolve-issue", "intervention", "bind-usage", "show"])
+    parser.add_argument("action", choices=["bind-execution-session", "configure-execution-policy", "configure-task-plan", "open-question", "answer-question", "recover-question", "question-status", "register", "register-execution-plan", "revise-execution-plan", "configure-verification", "configure-completion", "configure-documents", "configure-verification-capabilities", "record-context-maintenance", "configure-development", "refresh-validation", "configure-stage", "configure-stage-workflow", "bind-stage-inputs", "return-to-stage", "configure-delegation", "configure-runtime-limits", "configure-qa", "configure-collection", "collection-report", "integration", "ready", "begin", "submit", "review", "handoff", "checkpoint", "resume", "continue-command-run", "transition-approved-contract", "recover-contract-transition", "fail", "issue", "route-issue", "resolve-issue", "intervention", "bind-usage", "show"])
     parser.add_argument("--data", type=Path)
     args = parser.parse_args()
     tasks = Tasks(args.root, args.run_id)
