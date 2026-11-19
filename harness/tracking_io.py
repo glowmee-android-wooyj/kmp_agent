@@ -39,6 +39,10 @@ def capture_budget(root, task_id):
 
 
 def check_deadline():
+    from harness.command_preflight import current
+    budget = current()
+    if budget is not None and budget.armed and time.monotonic() >= budget.deadline:
+        budget._expired(None, None)
     if _deadline.get() is not None and time.monotonic() >= _deadline.get():
         raise ValueError('capture inspection deadline exceeded; validation not established')
 
@@ -46,6 +50,14 @@ def check_deadline():
 def run_git(root, *args, input=None):
     remaining=GIT_TIMEOUT_SECONDS
     if _deadline.get() is not None:remaining=min(remaining,_deadline.get()-time.monotonic())
+    from harness.command_preflight import current
+    budget = current()
+    preflight_limited = False
+    if budget is not None and budget.armed:
+        preflight_remaining = budget.deadline-time.monotonic()
+        preflight_limited = preflight_remaining <= remaining
+        remaining=min(remaining,preflight_remaining)
+        if remaining <= 0:budget._expired(None,None)
     if remaining<=0:raise ValueError('capture inspection deadline exceeded; validation not established')
     argv=['rtk','proxy','git',*args];started=time.monotonic()
     trace(root,'git_started',operation=args[0] if args else '',timeout_seconds=remaining)
@@ -58,9 +70,26 @@ def run_git(root, *args, input=None):
         error=type(exc).__name__
         from harness.execution_policy import stop_owned_group
         stop_owned_group(child,lambda owned,timeout:owned.communicate(timeout=timeout),timeout=1)
-        if isinstance(exc,subprocess.TimeoutExpired):raise ValueError('Git inspection timed out; validation not established') from exc
+        if isinstance(exc,subprocess.TimeoutExpired):
+            if budget is not None and budget.armed and (preflight_limited or time.monotonic() >= budget.deadline):
+                budget._expired(None,None)
+            raise ValueError('Git inspection timed out; validation not established') from exc
         raise
     finally:trace(root,'git_finished',operation=args[0] if args else '',pid=child.pid,returncode=child.returncode,error=error,elapsed_seconds=time.monotonic()-started)
+
+
+def bounded_flock(handle, operation=fcntl.LOCK_EX):
+    """Honor a command's deadline without changing non-command lock behavior."""
+    from harness.command_preflight import current
+    budget = current()
+    if budget is None or not budget.armed or operation & fcntl.LOCK_NB:
+        return fcntl.flock(handle, operation)
+    while True:
+        check_deadline()
+        try:
+            return fcntl.flock(handle, operation | fcntl.LOCK_NB)
+        except BlockingIOError:
+            time.sleep(.01)
 
 
 @contextmanager
@@ -68,6 +97,7 @@ def state_lock(root, path, action):
     start=time.monotonic();trace(root,'state_lock_wait',action=action)
     with Path(path).open('a+') as handle:
         while True:
+            check_deadline()
             try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB);break
             except BlockingIOError:
                 if time.monotonic()-start>=LOCK_TIMEOUT_SECONDS:

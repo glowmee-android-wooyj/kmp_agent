@@ -52,6 +52,17 @@ kmp_agent는 공통 기능·실행 방식·사용 전제·제약을 관리한다
 
 릴리스 후보는 개발 원본의 테스트를 삭제해 가볍게 만들지 않는다. 이 기능이 포함된 설치기는 [제품 설치 파일 선별](../installation.md#제품-설치-파일-선별)로 하네스 자체 테스트·예제·시험 도구를 설치 작업트리에서 제외한다. 후보 검증에는 필터 적용 후 최초 설치·명시적 update·역할/QA/정적 자원·공통 skills의 가용성, Git SHA/clean 확인과 제품 파일·로그 보존을 포함한다. 테스트와 fixture는 전체 개발 checkout에서 유지·검증하며, 제품용 실행 모듈이나 제품 자체의 테스트를 이름만으로 삭제하지 않는다. 기존 버전의 설치기는 소급 변경되지 않으므로 첫 전환에 사용할 부트스트랩 버전도 릴리스 안내에 명시한다.
 
+가드·승인·명령 재개에 영향이 있는 후보는 이전 설치본에서 이미 승인받아 착수한 작업으로 연속 흐름을 검증한다. 설치본의 공식 update 뒤 같은 승인·구현 시도로 계약 전환, 사전 검사 타임아웃 후 재시도, 빌드·테스트·제출을 통과하고 범위 밖 편집과 미승인 명령은 거부되어야 한다. 이전·후보 커밋을 모두 포함한 로컬 Git 저장소와 각 전체 SHA를 지정해 재현한다.
+
+```sh
+KMP_TEST_UPGRADE_SOURCE=/path/to/source \
+KMP_TEST_UPGRADE_FROM='previous-full-sha' \
+KMP_TEST_UPGRADE_TO='candidate-full-sha' \
+python3 -B -m unittest harness.test_sequential.TemporaryProjectCLI.test_pinned_upgrade_preserves_approved_command_flow
+```
+
+이 시험의 설치본 guard 진입점 검증과 신뢰된 실제 Codex 세션에서 관측한 훅 호출 결과를 각각 기록한다.
+
 <a id="instruction-maintenance"></a>
 
 ## 버전업 지침 정비

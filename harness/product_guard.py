@@ -441,9 +441,27 @@ def _help_command(root, argv):
     return True
 
 
+def _process_diagnostic(argv):
+    """Fixed process columns and explicit PIDs; never environments or shell code."""
+    if not argv or argv[0] not in {'ps', '/bin/ps', '/usr/bin/ps'}:
+        return False
+    if argv[1:] == ['-axo', 'pid,args']:
+        return True
+    if len(argv) != 5 or argv[1] != '-p' or argv[3] != '-o':
+        return False
+    pids = argv[2].split(',')
+    if not 1 <= len(pids) <= 32 or any(not p.isascii() or not p.isdecimal() or len(p) > 10 or int(p) < 1 for p in pids):
+        return False
+    fields = argv[4].split(',')
+    allowed = {'pid', 'ppid', 'pgid', 'stat', 'state', 'etime', 'time', '%cpu', '%mem', 'args', 'command', 'comm'}
+    return bool(fields) and len(fields) == len(set(fields)) and set(fields) <= allowed
+
+
 def _shell(root, state, session, command):
     argv = _argv(command)
     if _managed_update_command(root, argv):
+        return
+    if _process_diagnostic(argv):
         return
     program = Path(argv[0]).name
     if argv[0] != program:
@@ -514,14 +532,28 @@ def _shell(root, state, session, command):
             run, task_id = _option(argv,'--run-id'), _option(argv,'--task-id')
             if run not in _runs(state,session):
                 raise ValueError('command belongs to a different native session; bind-execution-session for the actual run')
-            if '--argv-json' not in argv:
-                raise ValueError('guarded product command requires explicit approved argv')
-            authorize_command(root,state,task_id,json.loads(_option(argv,'--argv-json')),run_id=run)
+            explicit = _option(argv, '--argv-json', required=False)
+            name = _option(argv, '--command-name', required=False)
+            if name is not None:
+                from harness.sequential import UNKNOWN, named_command
+                kind = _option(argv, '--command-kind', required=False)
+                if explicit is not None:
+                    raise ValueError('choose an existing named command without explicit argv')
+                command_argv, _, _, _ = named_command(root, name, None, UNKNOWN if kind is None else kind)
+            elif explicit is not None:
+                command_argv = json.loads(explicit)
+            else:
+                raise ValueError('guarded product command requires --command-name or explicit approved --argv-json')
+            from harness.command_runs import require_open
+            from harness.logging import Logger
+            records = Logger(root).read()
+            authorize_command(root,state,task_id,command_argv,run_id=run,records=records)
+            require_open(root, run, task=state['tasks'][task_id], records=records)
             return
     raise ValueError('unclassified executable tool path; use approved task commands instead of direct execution')
 
 
-def authorize_command(root, state, task_id, argv, run_id=None):
+def authorize_command(root, state, task_id, argv, run_id=None, *, records=None):
     """Also called inside Logger.command, so a wrapper cannot smuggle arbitrary code."""
     if not installed(root): return
     task = state.get('tasks',{}).get(task_id)
@@ -539,7 +571,7 @@ def authorize_command(root, state, task_id, argv, run_id=None):
     run = works[0]['run_id']
     if run_id is not None:
         from harness.command_runs import linked
-        if not linked(root,state,task,works[0],run_id):
+        if not linked(root,state,task,works[0],run_id,records=records):
             raise ValueError('installed product command run differs from active execution')
     session = state.get('execution_policy_bindings',{}).get(run,{}).get('root_session_id')
     _, selected = active(root,state,session,task_id=task_id)

@@ -30,24 +30,24 @@ def _record(root, run):
     return record
 
 
-def workspace_basis(manager, task):
+def workspace_basis(manager, task, reference=None):
     from harness import logging
-    files = logging.snapshot(manager.root)
+    policy = (reference or {}).get('scan_policy') if reference is not None else 'generated_pruned_v1'
+    if policy not in {None, 'generated_pruned_v1'}:
+        raise ValueError('unknown recovery scan policy')
+    prune_generated = policy == 'generated_pruned_v1'
+    files = logging.snapshot(manager.root, prune_generated=prune_generated)
     modes = {p:(manager.root/p).stat().st_mode & 0o777 for p in files}
     # Logging snapshots intentionally omit links. Recovery must also pin their
     # names and raw targets, including dangling and directory links, without
     # following them outside the workspace. Keep the same generated exclusions.
     links = {}
-    for path in manager.root.rglob('*'):
-        relative = path.relative_to(manager.root)
-        if (relative.parts[0] == 'verification'
-                or relative.parts[:2] == ('.kmp-agent', 'releases')
-                or any(p in ('.git', '.harness', '__pycache__') for p in relative.parts)
-                or path.name == '.DS_Store'):
-            continue
+    from harness.workspace_scan import paths
+    for path in paths(manager.root, prune_generated=prune_generated):
         if path.is_symlink():
-            links[str(relative)] = os.readlink(path)
+            links[str(path.relative_to(manager.root))] = os.readlink(path)
     result = {'files':files, 'modes':modes, 'symlinks':links}
+    if policy is not None:result['scan_policy'] = policy
     if task.get('development_tracking'):
         from harness.development_tracking import capture, baseline
         result['code'] = capture(manager, task)
@@ -67,11 +67,18 @@ def _completed_command(run, record):
     from harness.process_ownership import inspect_child
     proof = next((p for p in run.get('command_owner_completions', [])
                   if p.get('token') == record.get('token')), None)
+    aborted = next((p for p in run.get('command_prelaunch_aborts', [])
+                    if p.get('token') == record.get('token')), None)
+    # An explicit bounded-preflight abort certifies no child was created. It
+    # never fabricates an exit code or a successful command completion.
+    clean_abort = bool(aborted and not record.get('children')
+                       and aborted.get('process_spawned') is False)
+    proof = proof or (aborted if clean_abort else None)
     return bool(proof and proof.get('task_id') == run['task_id']
                 and proof.get('agent_run_id') == run['agent_run_id']
                 and proof.get('attempt_id') == run.get('attempt_id')
                 and proof.get('receipt_path') == record.get('receipt_path')
-                and type(proof.get('returncode')) is int
+                and (type(proof.get('returncode')) is int or clean_abort)
                 and record.get('closed') is True and record.get('released') is True
                 and not record.get('spawn_pending')
                 and all(inspect_child(child)['status'] == 'DEAD'
@@ -114,7 +121,8 @@ def claim(manager, task_id, agent_run_id, *, allow_completed_command=False):
             run.setdefault('owner_resume_claims', []).append(grant)
         lease.bind(agent_run_id)
         run['process_owner'] = lease.record()
-        run.setdefault('recovery_start_basis', workspace_basis(manager, task))
+        if 'recovery_start_basis' not in run:
+            run['recovery_start_basis'] = workspace_basis(manager, task)
         return copy.deepcopy(run['process_owner'])
     return manager._mutate('claim_managed_owner', op, task_id)
 
@@ -132,23 +140,71 @@ def owned_worker(function):
     return wrapped
 
 
+def _prelaunch_abort(manager, task_id, agent_run_id, error):
+    """Save only a no-child proof; never replay timed-out authorization checks."""
+    from harness.process_ownership import current_lease
+    from harness.command_preflight import Preflight, current, stage
+    from harness.tracking_io import state_lock
+    from harness.integration_transaction import read_barrier
+    from harness.protected_verification import validate_ledger
+    budget = current()
+    lease = current_lease(manager.root, task_id)
+    try:
+        with Preflight(manager.root, 2) as cleanup, stage('abort_ownership_cleanup'):
+            with read_barrier(manager.root, timeout=2), state_lock(
+                    manager.root, manager.directory/'state.lock', 'abort_command_prelaunch'):
+                state = json.loads(manager.path.read_text())
+                validate_ledger(manager.root, state)
+                receipt = lease.record()
+                if receipt.get('children') or receipt.get('spawn_pending'):
+                    return  # Uncertain spawn must use recovery, never retry.
+                task = state['tasks'][task_id]
+                run = next(r for r in task['executions'] if r['agent_run_id'] == agent_run_id)
+                if (run.get('ended_at') or (run.get('process_owner') or {}).get('token') != receipt['token']):
+                    return
+                proof = {'task_id':task_id, 'agent_run_id':agent_run_id,
+                         'attempt_id':run.get('attempt_id'), 'token':receipt['token'],
+                         'receipt_path':receipt['receipt_path'], 'process_spawned':False,
+                         'error_type':type(error).__name__}
+                run.setdefault('command_prelaunch_aborts', []).append(proof)
+                manager._event(state, 'command_prelaunch_aborted', task, agent_run_id, observed=proof)
+                validate_ledger(manager.root, state)
+                # Durable outbox is flushed by the next ordinary operation.
+                # Do not block timeout reporting on the full event-log scan.
+                manager._save(state)
+    except Exception as cleanup_error:
+        # Missing proof keeps the existing strict recovery requirement. Preserve
+        # the original timeout and do not infer clean ownership from a failure.
+        if budget is not None:
+            budget.emit('CLEANUP_DEFERRED', error_type=type(cleanup_error).__name__)
+
+
 def owned_command(function):
     @functools.wraps(function)
     def wrapped(manager, task_id, *args, **kwargs):
         from harness.process_ownership import TaskLease, current_lease
-        manager.require_dispatch(task_id)
-        state=manager.read()
-        task=state['tasks'].get(task_id, {})
-        active=[r for r in task.get('executions', []) if not r.get('ended_at')]
-        if len(active)!=1 or task.get('state') not in {'IN_PROGRESS','IN_REVIEW'}:
-            raise ValueError('managed command requires active unblocked execution')
-        aid=active[0]['agent_run_id']
+        from harness.command_preflight import stage, PreflightTimeout
+        with stage('ownership_dispatch'):
+            manager.require_dispatch(task_id)
+        with stage('ownership_state'):
+            state=manager.read()
+            task=state['tasks'].get(task_id, {})
+            active=[r for r in task.get('executions', []) if not r.get('ended_at')]
+            if len(active)!=1 or task.get('state') not in {'IN_PROGRESS','IN_REVIEW'}:
+                raise ValueError('managed command requires active unblocked execution')
+            aid=active[0]['agent_run_id']
         if current_lease(manager.root,task_id):
-            claim(manager,task_id,aid)
+            with stage('ownership_claim'):
+                claim(manager,task_id,aid)
             return function(manager,task_id,*args,**kwargs)
         with TaskLease(manager.root,task_id):
-            claim(manager,task_id,aid,allow_completed_command=True)
-            result = function(manager,task_id,*args,**kwargs)
+            try:
+                with stage('ownership_claim'):
+                    claim(manager,task_id,aid,allow_completed_command=True)
+                result = function(manager,task_id,*args,**kwargs)
+            except PreflightTimeout as error:
+                _prelaunch_abort(manager,task_id,aid,error)
+                raise
             # Only a standalone managed command's normal return certifies this
             # boundary. Nested worker leases and thrown exceptions remain strict.
             lease = current_lease(manager.root, task_id)
@@ -264,7 +320,7 @@ def _safe_basis(manager, state, task, run):
     before = run.get('recovery_start_basis')
     if not before:
         return None, 'start workspace basis unavailable'
-    current = workspace_basis(manager, task)
+    current = workspace_basis(manager, task, reference=before)
     expected = copy.deepcopy(before)
     if task.get('development_delegation'):
         for child in task['development_delegation']['children']:
@@ -369,14 +425,14 @@ def resume_task(manager, task_id, worker=None):
     if not manager._valid_artifact(receipt['checkpoint']):
         raise ValueError('recovery checkpoint changed')
     saved=json.loads((manager.root/receipt['checkpoint']['snapshot']).read_text())
-    if basis_identity(workspace_basis(manager,task))!=basis_identity(saved['current_basis']):
+    if basis_identity(workspace_basis(manager,task,reference=saved['current_basis']))!=basis_identity(saved['current_basis']):
         raise ValueError('recovery basis changed; recheck required')
     with TaskLease(manager.root,task_id):
         def reserve(state):
             live=state['tasks'][task_id]
             if live.get('recovery')!=receipt or any(not r.get('ended_at') for r in live['executions']):
                 raise ValueError('recovery admission changed or already active')
-            if basis_identity(workspace_basis(manager,live))!=basis_identity(saved['current_basis']):
+            if basis_identity(workspace_basis(manager,live,reference=saved['current_basis']))!=basis_identity(saved['current_basis']):
                 raise ValueError('recovery workspace changed during admission')
             if len([r for r in live['executions'] if r['kind']=='work'])>=live['max_attempts']:
                 raise ValueError('attempt budget exhausted')

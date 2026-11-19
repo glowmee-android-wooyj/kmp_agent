@@ -41,6 +41,23 @@ def settings(root):
     return validate_settings(json.loads(path.read_text())) if path.exists() else None
 
 
+def named_command(root, name, argv, kind):
+    path = Path(root) / SETTINGS
+    if argv is not None or not path.is_file():
+        raise ValueError("choose an existing named command without explicit argv")
+    settings_bytes = path.read_bytes()
+    commands = validate_settings(json.loads(settings_bytes)).get("commands", {})
+    if name not in commands:
+        raise ValueError("choose an existing named command without explicit argv")
+    selected = commands[name]
+    if kind != UNKNOWN and kind != selected["kind"]:
+        raise ValueError("command kind conflicts with named configuration")
+    cwd = (Path(root) / selected.get("cwd", ".")).resolve()
+    if not cwd.is_relative_to(Path(root).resolve()) or not cwd.is_dir():
+        raise ValueError("command cwd must exist inside target project")
+    return selected["argv"], selected["kind"], cwd, log.digest(settings_bytes)
+
+
 def save_settings(root, data):
     data = validate_settings(data)
     path = Path(root) / SETTINGS
@@ -130,7 +147,9 @@ def begin(manager, task, run):
     bundle = {"inputs": run["inputs"], "baseline": run.get("baseline"), "stage_contract": task.get("stage_contract")}
     collection["input_bundle_id"] = "sha256:" + log.digest(json.dumps(bundle, sort_keys=True).encode())
     collection["harness"] = copy.deepcopy(manager.logger.harness)
-    collection["files_start"] = copy.deepcopy(run["code_state_start"]["files"]) if run.get("code_state_start") else log.snapshot(manager.root)
+    collection["files_start"] = copy.deepcopy(run["code_state_start"]["files"]) if run.get("code_state_start") else log.snapshot(manager.root, prune_generated=True)
+    if not run.get("code_state_start"):
+        collection["snapshot_policy"] = "generated_pruned_v1"
     collection["file_scope"] = "development_code_state" if run.get("code_state_start") else "logger_snapshot_exclusions"
     collection["module_map"] = copy.deepcopy(config.get("modules", {})) if config is not None else UNKNOWN
     run["collection"] = collection
@@ -151,7 +170,7 @@ def finish(manager, task, run):
                         observed_modules=UNKNOWN, collection_error=type(error).__name__)
             return
     if after is None:
-        after = log.snapshot(manager.root)
+        after = log.snapshot(manager.root, prune_generated=data.get("snapshot_policy") == "generated_pruned_v1")
     data.update(files_end=after, changed_files=log.changes(data["files_start"], after),
                 modification_actor=UNKNOWN, attribution_basis="boundary observation; not exclusive ownership")
     mapping = data["module_map"]

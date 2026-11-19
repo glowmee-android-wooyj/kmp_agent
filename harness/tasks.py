@@ -437,7 +437,7 @@ class Tasks:
                 run["baseline"] = baseline(task)
                 run["code_state_start"] = capture(self, task)
             if task.get('verification_contract'):
-                run['ownership_files_start'] = logging.snapshot(self.root)
+                run['ownership_files_start'] = logging.snapshot(self.root, prune_generated=False)
             from harness.sequential import begin
             begin(self, task, run)
             for field in ('parent_task_id','development_area','coordination_plan_id'):
@@ -451,18 +451,21 @@ class Tasks:
                 from harness.recovery import workspace_basis
                 lease.bind(reserved_id)
                 run['process_owner'] = lease.record()
-                run['recovery_start_basis'] = workspace_basis(self, task)
                 recovery = task.get('recovery') or {}
+                expected = None
                 if not review and recovery.get('state')=='RECOVERABLE' and recovery.get('resume_dispatched') and not recovery.get('resumed_execution'):
                     from harness.recovery import basis_identity
                     checkpoint = recovery['checkpoint']
                     if not self._valid_artifact(checkpoint):
                         raise ValueError('recovery checkpoint changed before execution')
                     expected = json.loads((self.root/checkpoint['snapshot']).read_text())['current_basis']
+                    run['recovery_start_basis'] = workspace_basis(self, task, reference=expected)
                     if basis_identity(run['recovery_start_basis']) != basis_identity(expected):
                         raise ValueError('recovery basis changed before execution; recheck required')
                     run['recovery_from'] = recovery['recovery_id']
                     recovery['resumed_execution'] = reserved_id
+                else:
+                    run['recovery_start_basis'] = workspace_basis(self, task)
             task["executions"].append(run)
             if task.get('execution_contract'):
                 run['execution_contract'] = copy.deepcopy(task['execution_contract'])

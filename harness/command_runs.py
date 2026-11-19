@@ -19,6 +19,32 @@ def _events(root):
     return Logger(root).read()
 
 
+class CommandRunFinished(ValueError):
+    """The selected top-level command log has ended."""
+
+
+def require_open(root, run_id, *, task=None, records=None):
+    records = _events(root) if records is None else records
+    if not any(event['run_id'] == run_id and event['event_type'] == 'run_finished'
+               for event in records):
+        return
+    message = 'run already finished'
+    if task and task.get('state') == 'IN_PROGRESS':
+        works = [run for run in task.get('executions', [])
+                 if run.get('kind') == 'work' and not run.get('ended_at')]
+        if len(works) == 1:
+            work = works[0]
+            links = work.get('command_run_continuations', [])
+            latest = links[-1]['command_run_id'] if links else work['run_id']
+            message += f'; active execution run is {work["run_id"]}'
+            if run_id == latest:
+                message += ('; use task --operation continue-command-run with the execution run as --run-id '
+                            'and the finished run as previous_run_id')
+            else:
+                message += f'; inspect task state for the latest command run ({latest})'
+    raise CommandRunFinished(message)
+
+
 def linked(root, state, task, execution, command_run_id, *, historical=False, records=None, include_previous=False):
     """A new log run grants command logging only, never task lifecycle ownership."""
     if command_run_id == execution['run_id']:

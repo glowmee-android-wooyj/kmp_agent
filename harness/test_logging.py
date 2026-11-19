@@ -37,6 +37,19 @@ def patch_environment(values):
 
 
 class LoggingTests(unittest.TestCase):
+    def test_file_maintenance_uses_selected_harness_outside_checkout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            module.Logger(root).start('HARNESS_BUILD','improvement','Synthetic legacy maintenance')
+            shadow=root/'harness';shadow.mkdir()
+            (shadow/'__init__.py').write_text('raise RuntimeError("project package must not shadow selected harness")')
+            source=Path(__file__).resolve().parents[1]
+            environment=dict(os.environ,PYTHONPATH=str(root)+os.pathsep+str(source))
+            result=subprocess.run([sys.executable,'-B',str(source/'harness/collection_maintenance.py'),
+                '--root',str(root),'status'],cwd=root,env=environment,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIsInstance(json.loads(result.stdout),dict)
+
     def test_cli_collects_before_classification_failure_and_at_finish(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
