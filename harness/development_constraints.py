@@ -227,7 +227,7 @@ def check_code(manager, task, root=None, complete=True):
                 raise ValueError('approved shared/platform UI source missing: ' + name)
 
 
-def review_gate(manager, task, evidence):
+def review_gate(manager, task, evidence, state=None):
     frozen = load(manager, task)
     if not frozen: return
     complete = not task.get('parent_task_id')
@@ -256,8 +256,15 @@ def review_gate(manager, task, evidence):
             matching = [event for event in events if event.get('task_id') == task['task_id'] and event.get('agent_run_id') == execution_id and event.get('observed', {}).get('call_id') == proof.get('call_id')]
             starts = [e for e in matching if e['event_type'] == 'command_started']
             ends = [e for e in matching if e['event_type'] == 'command_finished']
-            if len(starts) != 1 or len(ends) != 1 or starts[0]['sequence'] >= ends[0]['sequence'] or starts[0]['run_id'] != works[-1]['run_id'] or ends[0]['run_id'] != works[-1]['run_id']:
+            if (len(starts) != 1 or len(ends) != 1 or starts[0]['sequence'] >= ends[0]['sequence']
+                    or starts[0]['run_id'] != ends[0]['run_id']):
                 raise ValueError('target command needs exact native start/finish events')
+            if starts[0]['run_id'] != works[-1]['run_id']:
+                from harness.command_runs import linked
+                from harness.approvals import ledger
+                current_state = ledger(manager.root) if state is None else state
+                if not linked(manager.root, current_state, task, works[-1], starts[0]['run_id'], records=events, include_previous=True):
+                    raise ValueError('target command needs exact native start/finish events linked to submitted work')
             if any(event['observed'].get('cwd') != '.' or event['observed'].get('code_state_sha256') != code_state
                    for event in (starts[0], ends[0])):
                 raise ValueError('target command must verify submitted code in project root')

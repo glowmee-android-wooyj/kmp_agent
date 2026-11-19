@@ -75,7 +75,7 @@ def gate(manager, task):
             raise ValueError("temporary/mock API cannot authorize real integration or server implementation")
 
 
-def review_gate(manager, task, results):
+def review_gate(manager, task, results, state=None):
     """Review JSON is an attestation linked to exact outputs, not automatic E2E execution."""
     from harness.acceptance_contract import review_gate as acceptance_review
     acceptance_review(manager, task, results)
@@ -85,7 +85,7 @@ def review_gate(manager, task, results):
         for item in results:
             if item['result'] == 'PASS' and item['criterion_id'] in required:
                 report = json.loads((manager.root / item['evidence']['snapshot']).read_text())
-                constraints_review(manager, task, report)
+                constraints_review(manager, task, report, state=state)
     if task.get("stage_contract", {}).get("stage") != "integration_verification":
         return
     gate(manager, task)

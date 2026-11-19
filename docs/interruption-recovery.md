@@ -35,6 +35,12 @@ resume_plan은 현재 근거가 유효한 완료 작업의 skip 목록, 미완�
 
 `run already finished`이면 기존 `run_finished`를 지우거나 원장을 편집하지 않는다. 작업이 `BLOCKED`이면 기존 checkpoint와 승인으로 복구해 `IN_PROGRESS`로 돌아간다. 이미 `IN_PROGRESS`라면 기존 열린 work 실행을 사용한다. 이어서 [명령 로그 연결](execution-policy.md#종료된-상위-실행-뒤-명령-로그-이어가기)의 `continue-command-run`을 원래 task run에서 호출한다. 새 명령 로그 ID에 기존 task/agent/attempt ID를 함께 제공해 빌드·테스트를 실행한다. 같은 work 시도를 보존하는 연결이며 새 시도·재승인·자동 제품 재개가 아니다. 실행 소유권이 불확실하면 별도의 기존 복구부터 수행한다. 이 경로는 v0.4.11부터 지원한다.
 
+## 승인과 현재 기술 입력이 서로 다른 경우
+
+정확한 새 기술 제안이 승인됐지만 작업의 동결 입력은 이전 계약이라면 [승인된 기술 계약 전환](requirement-lineage.md#승인된-기술-계약을-기존-시도에-전환)을 사용한다. 승인 원문이나 열린 실행의 시작 baseline을 편집하지 않는다. 전환 뒤에도 기존 task/agent/attempt를 유지하며 변경된 계약에 필요한 QA·재개 검사를 통과해야 한다. 과거 승인·QA 결과는 보존하며 현재 계약에 자동 재사용하지 않는다.
+
+전환 중 중단된 journal은 `recover-contract-transition`에 transaction ID와 이유를 제공해 복구한다. 전환 전 명령 continuation이 열려 있다면 자식 프로세스 종료를 확인하고 해당 명령 run을 인계 종료한 뒤, 작업 재개 후 새 `continue-command-run`으로 현재 계약에 연결한다. 전환·journal 복구·작업 재개·명령 연결은 별도 동작이다.
+
 ## 시간 분류와 중복 방지
 
 - 전체 경과: 기존 run_started부터 run_finished까지. 요청 시작을 근거로 별도 지정하면 그 범위도 계산한다. 종료 기록이 없으면 전체 경과는 UNKNOWN이다.

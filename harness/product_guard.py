@@ -494,9 +494,10 @@ def _shell(root, state, session, command):
             return  # argparse help is diagnostic, independent of product state.
         state = state if state is not None else _state(root)
         if action in MANAGEMENT:
-            if action == 'task' and _option(argv,'--operation',required=False) == 'continue-command-run':
+            operation = _option(argv, '--operation', required=False) if action == 'task' else None
+            if operation in {'continue-command-run', 'transition-approved-contract', 'recover-contract-transition'}:
                 if _option(argv,'--run-id') not in _runs(state,session):
-                    raise ValueError('command continuation belongs to a different native root session')
+                    raise ValueError(f'{operation} belongs to a different native root session')
             if action in {'planning','design','development','verification','qa'}:
                 task = state.get('tasks',{}).get(_option(argv,'--task-id'),{})
                 if task.get('work_type') != 'PRODUCT':

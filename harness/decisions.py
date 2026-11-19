@@ -381,6 +381,8 @@ def _contract_current(state, q, root=None):
     current_tasks = _task_basis(state, root, ids, include_code=bool(contract.get('purpose')))
     expected_tasks = contract['tasks']
     if contract.get('purpose') == 'requirement_lineage':
+        from harness.contract_transition import approval_basis
+        expected_tasks = approval_basis(root, state, q, expected_tasks)
         # Source authorization permits implementation progress, not a new input
         # or code scope. Keep capture's fail-closed checks and compare every
         # scope field, but treat the opening code digest as audit evidence.

@@ -164,6 +164,12 @@ class SequentialTests(unittest.TestCase):
 
 class TemporaryProjectCLI(unittest.TestCase):
     def test_init_task_command_coverage_and_init_reuse(self):
+        self._installed_command_flow()
+
+    def test_approved_contract_transition_installed_command_flow(self):
+        self._installed_command_flow(transition=True)
+
+    def _installed_command_flow(self, transition=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "applied project"
             root.mkdir()
@@ -263,10 +269,11 @@ else:
                 stages[stage]={'task_id':tid,'checks':checks}
             attach_existing(manager,['P','D','PLAN','T'],'IMPLEMENT','delivery_with_qa','Synthetic installed command coverage','input.md','Connect fixture before any work')
             manager.configure_execution_policy(str(native),session,apply_to_work_types=['PRODUCT'])
-            def approve_lineage(qid, targets):
+            def approve_lineage(qid, targets, candidate=None, supersedes=None):
                 manager.open_question(qid,'Synthetic unit only: approve exact technology source for command transport?', targets,
                     [{'id':'approve','label':'Approve synthetic unit policy'}],approval_purpose='requirement_lineage',
-                    approval_subject=approval_subject(load(root)),approval_artifacts=['input.md','derived.md'])
+                    approval_subject=approval_subject(candidate or load(root)),supersedes_question_id=supersedes,
+                    approval_artifacts=list(dict.fromkeys(s['path'] for s in (candidate or load(root))['sources'])))
                 question=manager.question_status()[qid]['question']
                 call='synthetic-sequential-prompt-'+qid
                 native_records.append({'type':'response_item','payload':{'type':'function_call','name':'request_user_input_async','call_id':call,'arguments':json.dumps({'questions':[{'question':question,'options':['Approve synthetic unit policy']}]})}})
@@ -313,8 +320,34 @@ else:
             command_run_id = run_id
             for value in (2, 3):
                 if value == 3:
-                    task('checkpoint',dict(task_id='T',agent_run_id=run['agent_run_id'],
-                        reason='Synthetic handoff after authorized implementation',checkpoint='input.md'))
+                    if transition:
+                        # T2 is approved against the still-current T1 task basis.
+                        # The official operation must preserve this exact receipt.
+                        candidate = copy.deepcopy(load(root))
+                        for rows in (candidate['requirements'], candidate['derived_items']):
+                            rows[0]['expected']['development_constraints']['source_rules'][0]['required_patterns'] = ['val value = [23]']
+                        (root/'technical-proposal.json').write_text('Synthetic T2 proposal: accept the exact revised fixture source rule')
+                        proposal_ref = file_ref(root,'technical-proposal.json')
+                        candidate['sources'].extend([
+                            dict(id='PROPOSAL',kind='APPROVED_REQUIREMENTS',anchor='synthetic T2',
+                                 approval={'source':'U','anchor':'synthetic explicit approval','approved_sha256':proposal_ref['sha256']},**proposal_ref),
+                            dict(id='PROPOSAL-DERIVED',kind='AGENT_DERIVED',anchor='synthetic T2 mapping',**proposal_ref)])
+                        candidate['requirements'][0]['source'] = 'PROPOSAL'
+                        candidate['derived_items'][0]['source'] = 'PROPOSAL-DERIVED'
+                        candidate['human_authorization'] = {'question_id':'SYNTHETIC-T2','task_id':'T'}
+                        approve_lineage('SYNTHETIC-T2', ['T'], candidate, supersedes='SYNTHETIC-CODE-APPROVAL')
+                        original_questions = copy.deepcopy(manager.read()['required_questions'])
+                        original_native = native.read_bytes()
+                        canonical = root/'requirement-lineage.json'
+                        before = __import__('hashlib').sha256(canonical.read_bytes()).hexdigest()
+                        (root/'candidate.json').write_text(json.dumps(candidate))
+                        task('transition-approved-contract',dict(task_id='T',agent_run_id=run['agent_run_id'],
+                            question_id='SYNTHETIC-T2',candidate='candidate.json',before_sha256=before,
+                            reason='Apply the exact approved synthetic technical proposal',evidence='input.md'))
+                        self.assertEqual(load(root),candidate)
+                    else:
+                        task('checkpoint',dict(task_id='T',agent_run_id=run['agent_run_id'],
+                            reason='Synthetic handoff after authorized implementation',checkpoint='input.md'))
                     cli('finish',run_id=run_id,result='Synthetic blocked/handoff',end_reason='handoff')
                     task('resume',dict(task_id='T',agent_run_id=run['agent_run_id'],decision='input.md'))
                     blocked = cli('command',expected_exit=1,run_id=run_id,task_id='T',
@@ -340,12 +373,19 @@ else:
             self.assertFalse((root / 'outside/App.kt').exists())
             with self.assertRaisesRegex(ValueError, 'target_commands'):
                 authorize_command(root, manager.read(), 'T', ['unapproved-command'], run_id=run_id)
+            command_run_ids = []
             for name in ('build','test'):
                 command = 'python3 .kmp-agent/agent.py command --run-id ' + command_run_id + ' --task-id T --agent-run-id ' + run['agent_run_id'] + ' --attempt-id ' + run['attempt_id'] + ' --command-kind ' + name + " --argv-json '" + json.dumps(build_argv if name=='build' else test_argv) + "'"
                 self.assertEqual(evaluate(root,dict(hook_event_name='PreToolUse',cwd=str(root),
                     session_id=session,tool_name='exec_command',tool_input={'cmd':command})),{})
                 cli('command',run_id=command_run_id,task_id='T',agent_run_id=run['agent_run_id'],
                     attempt_id=run['attempt_id'],command_name=name)
+                command_run_ids.append(command_run_id)
+                if transition and name == 'build':
+                    cli('finish',run_id=command_run_id,result='Synthetic command handoff',end_reason='handoff')
+                    continuation = task('continue-command-run',dict(task_id='T',agent_run_id=run['agent_run_id'],
+                        previous_run_id=command_run_id,reason='Continue synthetic target testing',evidence='input.md'))
+                    command_run_id = continuation['command_run_id']
             current = manager.read()
             self.assertEqual(current['required_questions'],original_questions)
             self.assertEqual(native.read_bytes(),original_native)
@@ -355,11 +395,38 @@ else:
             self.assertTrue((root/'.harness/build.done').is_file())
             self.assertTrue((root/'.harness/test.done').is_file())
             task("submit", {"task_id": "T", "agent_run_id": run["agent_run_id"], "outputs": ["src/App.kt"], "summary": "synthetic"})
+            if transition:
+                # Mechanical architecture review accepts authenticated continued commands;
+                # this does not claim independent requirements/model/product QA.
+                from harness.development_constraints import review_gate
+                manager_state = manager.read()
+                submitted = manager_state['tasks']['T']
+                events = manager.logger.read()
+                command_ends = [e for e in events if e.get('event_type') == 'command_finished'
+                                and e.get('agent_run_id') == run['agent_run_id']]
+                proofs = []
+                for argv, event in zip((build_argv,test_argv), command_ends):
+                    observed = event['observed']
+                    proofs.append(dict(argv=argv,exit_code=0,**{key:observed[key] for key in
+                                  ('call_id','stdout_sha256','stderr_sha256')}))
+                evidence = dict(constraints_sha256=submitted['stage_contract']['development_constraints']['sha256'],
+                    constraint_review_run_id=run['agent_run_id'],
+                    constraint_target_results=[dict(target='jvm',result='PASS',commands=proofs)])
+                with patch.object(manager,'read',side_effect=AssertionError('nested task lock')):
+                    manager._mutate('continued_command_review_gate',
+                        lambda state: review_gate(manager,state['tasks']['T'],evidence,state=state),'T')
+                forged_events = copy.deepcopy(events)
+                for event in forged_events:
+                    if event.get('event_type') in {'command_started','command_finished'}:
+                        event['run_id'] = 'unlinked-run'
+                with patch.object(manager.logger,'read',return_value=forged_events):
+                    with self.assertRaisesRegex(ValueError,'start/finish'):
+                        review_gate(manager,submitted,evidence)
             result = cli("collection-report")
             self.assertEqual(result["commands_without_links"], 0)
             self.assertEqual(len(result['commands']),2)
             self.assertTrue(all(c['returncode']['value']==0 and c['link']['status']=='COLLECTED' for c in result['commands']))
-            self.assertTrue(all(c['run_id']==command_run_id for c in result['commands']))
+            self.assertEqual([c['run_id'] for c in result['commands']],command_run_ids)
             execution = result["tasks"]["T"]["executions"][0]
             self.assertEqual(execution["files"]["value"][0]["path"], "src/App.kt")
             self.assertEqual(execution["observed_modules"]["value"]["src/App.kt"], ["app"])

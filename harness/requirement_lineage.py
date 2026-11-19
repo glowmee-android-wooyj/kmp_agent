@@ -21,11 +21,11 @@ def file_ref(root, path):
     return {'path': path, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
 
 
-def load(root):
+def load(root, contract=None, state=None):
     path = Path(root) / NAME
-    if not path.is_file():
+    if contract is None and not path.is_file():
         raise ValueError('requirement lineage missing; legacy evidence is not certified')
-    c = json.loads(path.read_text())
+    c = json.loads(path.read_text()) if contract is None else contract
     if c.get('schema_version') != 1 or c.get('scope') not in {'PRODUCT', 'HARNESS_TRIAL'}:
         raise ValueError('explicit PRODUCT or HARNESS_TRIAL lineage required')
     if not c.get('purpose') or not c.get('sources') or not c.get('requirements') or not isinstance(c.get('derived_items'), list):
@@ -46,7 +46,10 @@ def load(root):
     paths = {}
     for s in sources.values():
         if s['path'] in paths and paths[s['path']] != s['kind']:
-            raise ValueError('same source cannot be both agent-derived and original/approved')
+            kinds = {paths[s['path']], s['kind']}
+            if (kinds != {'APPROVED_REQUIREMENTS', 'AGENT_DERIVED'}
+                    or _human_authorization(root, c, state)['status'] != 'CONFIRMED'):
+                raise ValueError('same source cannot be both agent-derived and original/approved without exact native authorization')
         paths[s['path']] = s['kind']
     reqs = {}
     for r in c['requirements']:
@@ -71,7 +74,7 @@ def approval_subject(contract):
             ('scope', 'purpose', 'sources', 'requirements', 'derived_items', 'decisions')}
 
 
-def _human_authorization(root, contract):
+def _human_authorization(root, contract, state=None):
     claimed = contract['scope'] == 'PRODUCT' or any(s['kind'] == 'APPROVED_REQUIREMENTS' for s in contract['sources']) or any(
         d.get('status') == 'APPROVED' for d in contract.get('decisions', []))
     if not claimed:
@@ -80,7 +83,7 @@ def _human_authorization(root, contract):
         from harness.approvals import human_approval, ledger
         ref = contract.get('human_authorization') or {}
         artifacts = {s['path']: s['sha256'] for s in contract['sources']}
-        receipt = human_approval(root, ledger(root), ref['question_id'], ref['task_id'],
+        receipt = human_approval(root, ledger(root) if state is None else state, ref['question_id'], ref['task_id'],
                                  'requirement_lineage', approval_subject(contract), artifacts)
         if receipt:
             return {'status': 'CONFIRMED', 'receipt': receipt}
@@ -90,8 +93,8 @@ def _human_authorization(root, contract):
             'reason': 'local source labels, role reviews and QA PASS are not human authorization'}
 
 
-def compare(root):
-    c = load(root)
+def compare(root, contract=None, state=None):
+    c = load(root, contract, state=state)
     sources = {s['id']: s for s in c['sources']}
     authority_issues = []
     for source in sources.values():
@@ -123,7 +126,7 @@ def compare(root):
         trial = c['scope'] == 'HARNESS_TRIAL' and decision.get('status') == 'TRIAL_ONLY' and bool(decision.get('reason')) and decision.get('expected') == d['expected'] and decision.get('actual') == d['actual']
         d['status'] = 'APPROVED' if approved else 'TRIAL_ONLY' if trial else 'DECISION_REQUIRED'
         d['decision'] = decision or None
-    authorization = _human_authorization(root, c)
+    authorization = _human_authorization(root, c, state)
     return {'scope': c['scope'], 'purpose': c['purpose'], 'contract': file_ref(root, NAME), 'sources': c['sources'], 'requirements': c['requirements'], 'derived_items': c['derived_items'], 'deltas': deltas, 'authority_issues': authority_issues, 'structurally_ready': not authority_issues and all(d['status'] != 'DECISION_REQUIRED' for d in deltas), 'authorization_ready': authorization['status'] in {'CONFIRMED', 'NOT_REQUIRED'}, 'human_authorization': authorization, 'product_requirements_pass': 'NOT_ESTABLISHED', 'execution_path_pass': 'NOT_ESTABLISHED', 'semantic_review': 'REQUIRED'}
 
 
