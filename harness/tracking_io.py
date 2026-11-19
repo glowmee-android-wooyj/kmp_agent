@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import threading
 import time
@@ -92,6 +93,36 @@ def bounded_flock(handle, operation=fcntl.LOCK_EX):
             time.sleep(.01)
 
 
+class LockWaitTimeout(TimeoutError):
+    def __init__(self, root, path, action, started):
+        path = Path(path)
+        lock_path = (path.parent.resolve() / path.name).relative_to(Path(root).resolve())
+        try:
+            owner_path = path.with_name(path.name + '.owner.json')
+            fd = os.open(owner_path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise ValueError('lock owner record must be a regular file')
+                owner = json.loads(os.read(fd, 4096))
+            finally:
+                os.close(fd)
+            hint = (f"{owner['state']} pid={owner['pid']} action={owner['action']} "
+                    f"recorded_at={owner['recorded_at']:.3f} (unverified)")
+        except (OSError, ValueError, KeyError, TypeError):
+            hint = 'unknown'
+        super().__init__(f'{lock_path} timed out after {time.monotonic() - started:.3f}s '
+                         f'while waiting for {action}; last owner record: {hint}')
+
+
+def record_lock_owner(path, action, state):
+    from harness.incremental_sync import atomic_json
+    try:
+        atomic_json(Path(str(path) + '.owner.json'), dict(
+            pid=os.getpid(), action=action, state=state, recorded_at=time.time()))
+    except OSError:
+        pass  # Diagnostics cannot change lock ownership or dispatch results.
+
+
 @contextmanager
 def state_lock(root, path, action):
     start=time.monotonic();trace(root,'state_lock_wait',action=action)
@@ -102,10 +133,13 @@ def state_lock(root, path, action):
             except BlockingIOError:
                 if time.monotonic()-start>=LOCK_TIMEOUT_SECONDS:
                     trace(root,'state_lock_timeout',action=action,wait_seconds=time.monotonic()-start)
-                    raise TimeoutError('task state lock timed out; no stale status or mutation returned')
+                    raise LockWaitTimeout(root, path, action, start)
                 time.sleep(.01)
         acquired=time.monotonic();trace(root,'state_lock_acquired',action=action,wait_seconds=acquired-start)
-        try:yield
+        try:
+            record_lock_owner(path, action, 'HELD')
+            yield
         finally:
+            record_lock_owner(path, action, 'RELEASED')
             fcntl.flock(handle,fcntl.LOCK_UN)
             trace(root,'state_lock_released',action=action,held_seconds=time.monotonic()-acquired)

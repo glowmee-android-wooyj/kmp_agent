@@ -167,6 +167,7 @@ def main():
             return 0 if result["connection"]["state"] == "VERIFIED" else 1
         return command_exit if command_exit is not None else 0
     except (OSError, ValueError, SyntaxError, KeyError, PreflightTimeout) as error:
+        from harness.tracking_io import LockWaitTimeout
         if args.action == 'update':
             # A rejected control FIFO/symlink must not be opened again by the
             # failure reporter. Do not infer identity from unverified metadata.
@@ -184,12 +185,14 @@ def main():
                 recovery = ("Inspect .harness/logs/command-preflight/<call_id>.jsonl for the last timed stage. "
                             "Keep the existing approval, task and attempt; retry only after a clean pre-spawn abort, "
                             "or use official task recovery if process ownership is uncertain.")
+            elif isinstance(error, LockWaitTimeout):
+                recovery = "Inspect the recorded lock owner and wait for the active task operation to finish before retrying."
             elif isinstance(error, CommandRunFinished):
                 recovery = str(error)
             else:
                 recovery = "Check the reported error, current task state and command --help before retrying."
         print(json.dumps({**context, "result": "FAIL", "error_type": type(error).__name__,
-                          "cause": str(error) if isinstance(error, (ValueError, PreflightTimeout)) else "Tool configuration operation failed",
+                          "cause": str(error) if isinstance(error, (ValueError, PreflightTimeout, LockWaitTimeout)) else "Tool configuration operation failed",
                           "recovery": recovery}, ensure_ascii=False))
         return 1
 

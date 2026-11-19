@@ -162,7 +162,7 @@ class InspectionTests(unittest.TestCase):
             with patch.object(io,'LOCK_TIMEOUT_SECONDS',.05):
                 for action in ('read','interrupt_request'):
                     start=time.monotonic()
-                    with self.assertRaisesRegex(TimeoutError,'no stale status'):
+                    with self.assertRaisesRegex(io.LockWaitTimeout, r'state\.lock timed out.*HELD pid=.*controlled_delay'):
                         if action=='read':self.m.read()
                         else:self.m.fail('ACTIVE',active['agent_run_id'],'controlled fixture interruption')
                     self.assertLess(time.monotonic()-start,.5)
@@ -170,6 +170,34 @@ class InspectionTests(unittest.TestCase):
         self.assertFalse(errors);self.assertFalse(t.is_alive())
         self.m.fail('ACTIVE',active['agent_run_id'],'retry interruption after lock release')
         task=self.m.read()['tasks']['ACTIVE'];self.assertEqual(task['state'],'BLOCKED');self.assertTrue(task['executions'][0]['ended_at'])
+
+    def test_integration_lock_timeout_reports_last_owner_and_release(self):
+        from harness.integration_transaction import read_barrier
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with read_barrier(self.root, action='ledger_refresh'):
+                entered.set()
+                release.wait(5)
+
+        thread = threading.Thread(target=holder)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            with self.assertRaisesRegex(io.LockWaitTimeout,
+                    rf'integration-transactions/lock timed out after .*dispatch.*HELD pid={os.getpid()} action=ledger_refresh'):
+                with read_barrier(os.path.relpath(self.root), timeout=.05, action='dispatch'):
+                    self.fail('contended lock was acquired')
+        finally:
+            release.set()
+            thread.join(5)
+        self.assertFalse(thread.is_alive())
+        owner = self.root / '.harness/integration-transactions/lock.owner.json'
+        self.assertEqual(json.loads(owner.read_text())['state'], 'RELEASED')
+        with read_barrier(self.root, timeout=.05, action='dispatch'):
+            self.assertEqual(json.loads(owner.read_text())['action'], 'dispatch')
 
     def test_timeout_during_refresh_invalidates_and_releases_lock(self):
         self.fixture.passed()

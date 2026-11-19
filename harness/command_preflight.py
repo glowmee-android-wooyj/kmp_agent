@@ -129,7 +129,9 @@ class Preflight:
         if kind and issubclass(kind, PreflightTimeout):
             self.emit('TIMED_OUT', error=str(error), process_spawned=self.spawned)
         elif kind:
-            self.emit('FAILED', error_type=kind.__name__, process_spawned=self.spawned)
+            from harness.tracking_io import LockWaitTimeout
+            details = {'error': str(error)} if isinstance(error, LockWaitTimeout) else {}
+            self.emit('FAILED', error_type=kind.__name__, process_spawned=self.spawned, **details)
 
     @contextlib.contextmanager
     def stage(self, name):
