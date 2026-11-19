@@ -82,6 +82,18 @@ class PreparationReadTests(unittest.TestCase):
         launcher.unlink();launcher.write_text(official+'\nprint("untrusted")\n')
         self.denied(self.tool(command='python3 .kmp-agent/agent.py --help'))
 
+    def test_fixed_process_diagnostics_allow_elapsed_cpu_without_environment_or_execution(self):
+        for command in ('ps -p 123 -o pid,ppid,stat,etime,%cpu,command',
+                        '/bin/ps -p 123,456 -o pid,pgid,etime,time,%cpu,%mem,state,args',
+                        '/usr/bin/ps -p 123 -o pid,comm', '/bin/ps -axo pid,args'):
+            with self.subTest(command=command):self.assertEqual({},self.tool(command=command))
+        for command in ('/tmp/ps -p 123 -o pid,args','./ps -p 123 -o pid,args',
+                        'ps -p 0 -o pid,args','ps -p -1 -o pid,args','ps -p 123 -o pid,env',
+                        'ps e -p 123 -o pid,args','ps -p 123 -o pid,args -e',
+                        'ps -p 123 -o pid=custom,args','ps -p 123 -o pid,pid',
+                        'ps -p 123 -o pid,args; touch bad'):
+            with self.subTest(command=command):self.denied(self.tool(command=command))
+
     def test_separate_simple_reads_work_without_enabling_compound_shell(self):
         for command in ('pwd', "rg 'plan|contract' docs", "sed -n '1,50p' AGENTS.md"):
             self.assertEqual({},self.tool(command=command))

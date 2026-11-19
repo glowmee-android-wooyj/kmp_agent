@@ -58,7 +58,7 @@ begin 결과의 실제 ID를 사용한다. 이름 있는 명령을 사용하면 
 rtk proxy python3 .kmp-agent/agent.py command --run-id <run> --task-id <task> --agent-run-id <agent> --attempt-id <attempt> --command-name unit-test
 ```
 
-일회성 명령은 `--argv-json '["rtk","proxy","python3","-m","unittest"]' --command-kind test`를 사용한다. 유형은 development/build/test/integration/other/UNKNOWN이다. 명령 시작·종료 UTC, monotonic 경과 시간, 반환 코드와 파일 변화를 기록한다. 명령 출력은 터미널로 전달하고 로그에는 출력 해시를 저장한다. 비정상 종료나 수집 중단으로 종료 근거가 없으면 누락/UNKNOWN이며 성공·0초로 처리하지 않는다.
+일회성 명령은 `--argv-json '["rtk","proxy","python3","-m","unittest"]' --command-kind test`를 사용한다. 유형은 development/build/test/integration/other/UNKNOWN이다. 명령 요청 시작·종료 UTC, monotonic 경과 시간, 반환 코드와 파일 변화를 기록한다. 기존 `command_started`만으로 실제 테스트가 실행됐다고 판단하지 않는다. 실제 자식 생성은 별도 `command_process_spawned`와 등록된 PID로 확인하며, 생성 전 지연·시간 초과는 [사전 검사 진단](execution-policy.md#명령-실행-전-검사와-지연-진단)의 단계별 JSONL/stderr를 확인한다. 사전 검사 한도는 기본 60초이며 `--preflight-timeout`으로 명시할 수 있고 자식 실행 시간과 구분한다. 명령 출력은 터미널로 전달하고 로그에는 출력 해시를 저장한다. 비정상 종료나 수집 중단으로 종료 근거가 없으면 누락/UNKNOWN이며 성공·0초로 처리하지 않는다.
 
 ID를 전혀 지정하지 않은 래퍼 명령은 기존 호출과 호환하되 MISSING으로 표시한다. 일부 ID만 지정하거나 다른/종료/차단된 실행을 지정하면 거부한다. 동일 시간대라는 이유로 귀속하지 않는다. 래퍼 밖 명령의 전체 수·누락 수는 UNKNOWN이다.
 
@@ -75,7 +75,7 @@ ID를 전혀 지정하지 않은 래퍼 명령은 기존 호출과 호환하되 
 | checkpoint/resume/fail의 대기 경계 | 대기 유형·대상·이유, 실제 재개/취소 호출 |
 | 기존 리뷰·CR·명시적 사용량 바인딩 참조 | 통합/충돌/재작업 원인·증거·해당 CR, 응답 사용량 귀속 근거 |
 
-코드 작업의 파일 관측 범위는 기존 development_tracking.code_paths를 재사용한다. 그 외는 로거 snapshot 제외 규칙을 사용한다. 시작 이전 dirty 변경이나 경계 사이에 변경 후 되돌린 내용은 실행 수정으로 재구성하지 않는다. 수정 주체는 항상 UNKNOWN으로 두고 경계 차이만 관측한다. 설정이 있어도 누락된 역할 선언을 추정 생성하지 않는다. 공통 역할 문서·실행 context·인계에서 이 절차를 재사용하므로 제품마다 별도 추적 프롬프트를 작성할 필요가 없다.
+코드 작업의 파일 관측 범위는 기존 development_tracking.code_paths를 재사용한다. 그 외는 로거 snapshot 제외 규칙을 사용하되, 생성물 가지치기는 새 run·명령 관측과 순차 수집의 코드 지문 없는 fallback에만 명시 적용하며 일반 `logging.snapshot`의 기본값과 검증 소유권의 시작·제출 비교는 기존의 엄격한 관측 범위를 유지한다. `.git`·`.harness`·`__pycache__`·루트 `verification`·`.kmp-agent/releases` 하위는 진입 전에 가지치기한다. `build`, `node_modules`, `.gradle`, `.kotlin`, `dist`, `tools/.runtime`도 Git의 추적 파일이나 ignore되지 않은 파일이 하위에 없을 때만 생성물로 제외한다. Git 조회 실패 시 이 추가 제외를 적용하지 않으며, 추적되거나 ignore되지 않은 같은 이름의 소스는 계속 관측한다. 승인 artifact와 `development_tracking`의 현재 소스 지문 검사는 별도로 유지한다. 새 관측 시작 기록의 `snapshot_policy`와 새 복구 기준의 `scan_policy`에 `generated_pruned_v1`을 고정하며, 이 표시가 없는 과거 기록과 비교할 때는 기존 생성물 지문을 유지해 이력을 다시 쓰거나 가짜 삭제로 관측하지 않는다. 시작 이전 dirty 변경이나 경계 사이에 변경 후 되돌린 내용은 실행 수정으로 재구성하지 않는다. 수정 주체는 항상 UNKNOWN으로 두고 경계 차이만 관측한다. 설정이 있어도 누락된 역할 선언을 추정 생성하지 않는다. 공통 역할 문서·실행 context·인계에서 이 절차를 재사용하므로 제품마다 별도 추적 프롬프트를 작성할 필요가 없다.
 
 ## 수집 충족도
 

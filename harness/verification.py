@@ -208,7 +208,7 @@ def submission_gate(manager, task, run, outputs):
     from harness.logging import snapshot
     before=run.get('ownership_files_start')
     if before is None: raise ValueError('ownership start snapshot missing')
-    after=snapshot(manager.root)
+    after=snapshot(manager.root, prune_generated=False)
     changed.update(p for p in before.keys() | after.keys() if before.get(p)!=after.get(p))
     if task.get('development_tracking'):
         from harness.development_tracking import capture

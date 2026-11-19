@@ -441,9 +441,27 @@ def _help_command(root, argv):
     return True
 
 
+def _process_diagnostic(argv):
+    """Fixed process columns and explicit PIDs; never environments or shell code."""
+    if not argv or argv[0] not in {'ps', '/bin/ps', '/usr/bin/ps'}:
+        return False
+    if argv[1:] == ['-axo', 'pid,args']:
+        return True
+    if len(argv) != 5 or argv[1] != '-p' or argv[3] != '-o':
+        return False
+    pids = argv[2].split(',')
+    if not 1 <= len(pids) <= 32 or any(not p.isascii() or not p.isdecimal() or len(p) > 10 or int(p) < 1 for p in pids):
+        return False
+    fields = argv[4].split(',')
+    allowed = {'pid', 'ppid', 'pgid', 'stat', 'state', 'etime', 'time', '%cpu', '%mem', 'args', 'command', 'comm'}
+    return bool(fields) and len(fields) == len(set(fields)) and set(fields) <= allowed
+
+
 def _shell(root, state, session, command):
     argv = _argv(command)
     if _managed_update_command(root, argv):
+        return
+    if _process_diagnostic(argv):
         return
     program = Path(argv[0]).name
     if argv[0] != program:

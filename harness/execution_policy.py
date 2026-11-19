@@ -148,26 +148,31 @@ def dependency_closure(state, initial):
             return affected
 
 
-def pending(state, task_id):
-    result = []
-    for qid, q in state.get('required_questions', {}).items():
-        from harness.decisions import is_superseded
-        if is_superseded(state, q):
-            continue
-        if q.get('status') == 'ANSWERED':
-            from harness.decisions import validate_answer
-            if validate_answer(state, q):
+def pending_scopes(state, task_id=None):
+    """Validate each relevant question once per query; never cache approvals."""
+    from harness.decisions import is_superseded, validate_answer, native_record_batch
+    result = {}
+    with native_record_batch():
+        for qid, q in state.get('required_questions', {}).items():
+            contract = q.get('decision_contract') or {}
+            roots = set()
+            for field in (q.get('propagated_task_ids'), q.get('affected_task_ids'), contract.get('affected_task_ids')):
+                if isinstance(field, list) and all(isinstance(t, str) for t in field):
+                    roots.update(field)
+            # Broken scopes remain fail-closed for every task.
+            affected = dependency_closure(state, roots) if roots else set(state['tasks'])
+            if task_id is not None and task_id not in affected:
                 continue
-        contract = q.get('decision_contract') or {}
-        roots = set()
-        for field in (q.get('propagated_task_ids'), q.get('affected_task_ids'), contract.get('affected_task_ids')):
-            if isinstance(field, list) and all(isinstance(t, str) for t in field):
-                roots.update(field)
-        # Broken scope records cannot become permission to proceed.
-        affected = dependency_closure(state, roots) if roots else set(state['tasks'])
-        if task_id in affected:
-            result.append(qid)
+            if is_superseded(state, q):
+                continue
+            if q.get('status') == 'ANSWERED' and validate_answer(state, q):
+                continue
+            result[qid] = affected
     return result
+
+
+def pending(state, task_id):
+    return list(pending_scopes(state, task_id))
 
 
 def gate(manager, state, task_id, action):
@@ -274,25 +279,45 @@ def stop_owned_group(child, drain, timeout=2):
 
 
 from harness.recovery import owned_command
+from harness.command_preflight import bounded, current as current_preflight, stage as preflight_stage
 
 
+@bounded
 @owned_command
-def managed_command(manager, task_id, argv, cwd, timeout=None, text=True):
+def managed_command(manager, task_id, argv, cwd, timeout=None, text=True,
+                    preflight_timeout=60, on_spawn=None):
     """Poll and terminate only this owned process; no arbitrary historical PIDs."""
-    manager.require_dispatch(task_id)
-    watch = WorkerGate(manager, task_id)
+    # The ownership wrapper already performs a fresh dispatch check. Keep the
+    # final claim/spawn-intent checks rather than replaying that whole gate here.
+    budget = current_preflight()
+    with preflight_stage('worker_gate'):
+        watch = WorkerGate(manager, task_id)
     from harness.recovery import spawn_intent, register_process, cancel_spawn
-    active=[r for r in manager.read()['tasks'][task_id]['executions'] if not r.get('ended_at')]
-    intent=spawn_intent(manager,task_id,active[0]['agent_run_id'])
+    with preflight_stage('active_execution'):
+        active=[r for r in manager.read()['tasks'][task_id]['executions'] if not r.get('ended_at')]
+    with preflight_stage('spawn_intent'):
+        intent=spawn_intent(manager,task_id,active[0]['agent_run_id'])
+    # A Popen interrupted before returning can lose the only safe child handle.
+    # Bound all checks, then explicitly cross the process-creation boundary.
+    child = None
     try:
-        child = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text,
-                                 start_new_session=True)
-    except OSError:
-        cancel_spawn(manager,task_id,intent)
-        raise
-    register_process(manager,task_id,child,intent)
-    deadline = time.monotonic() + timeout if timeout is not None else None
-    try:
+        with preflight_stage('process_launch'):
+            budget.stop_checks()
+            try:
+                child = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text,
+                                         start_new_session=True)
+            except OSError:
+                cancel_spawn(manager,task_id,intent)
+                raise
+            # Observation precedes registration: a slow receipt/guardian path
+            # must not make an already-created child appear unlaunched.
+            budget.spawned = True
+            budget.emit('SPAWNED', pid=child.pid)
+            if on_spawn is not None:
+                on_spawn(child)
+        with preflight_stage('process_registration'):
+            register_process(manager,task_id,child,intent)
+        deadline = time.monotonic() + timeout if timeout is not None else None
         while True:
             watch.check()
             remaining = deadline - time.monotonic() if deadline is not None else .2
@@ -305,5 +330,6 @@ def managed_command(manager, task_id, argv, cwd, timeout=None, text=True):
             except subprocess.TimeoutExpired:
                 continue
     except BaseException:
-        stop_owned_group(child, lambda owned, timeout: owned.communicate(timeout=timeout))
+        if child is not None:
+            stop_owned_group(child, lambda owned, timeout: owned.communicate(timeout=timeout))
         raise

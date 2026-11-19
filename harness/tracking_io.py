@@ -39,12 +39,21 @@ def capture_budget(root, task_id):
 
 
 def check_deadline():
+    from harness.command_preflight import current
+    budget = current()
+    if budget is not None and budget.armed and time.monotonic() >= budget.deadline:
+        budget._expired(None, None)
     if _deadline.get() is not None and time.monotonic() >= _deadline.get():
         raise ValueError('capture inspection deadline exceeded; validation not established')
 
 
 def run_git(root, *args, input=None):
     remaining=GIT_TIMEOUT_SECONDS
+    from harness.command_preflight import current
+    budget = current()
+    if budget is not None and budget.armed:
+        remaining=min(remaining,budget.deadline-time.monotonic())
+        if remaining <= 0:budget._expired(None,None)
     if _deadline.get() is not None:remaining=min(remaining,_deadline.get()-time.monotonic())
     if remaining<=0:raise ValueError('capture inspection deadline exceeded; validation not established')
     argv=['rtk','proxy','git',*args];started=time.monotonic()

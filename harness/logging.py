@@ -82,20 +82,11 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def snapshot(root):
-    result = {}
-    for path in root.rglob("*"):
-        relative = path.relative_to(root)
-        if relative.parts[0] == "verification":
-            continue
-        if relative.parts[:2] == (".kmp-agent", "releases"):
-            continue
-        if any(p in (".git", ".harness", "__pycache__") for p in relative.parts):
-            continue
-        if path.is_symlink() or not path.is_file() or path.name == ".DS_Store":
-            continue
-        result[str(relative)] = digest(path.read_bytes())
-    return result
+def snapshot(root, *, prune_generated=False):
+    from harness.workspace_scan import paths
+    root = Path(root)
+    return {str(path.relative_to(root)): digest(path.read_bytes())
+            for path in paths(root, prune_generated=prune_generated) if not path.is_symlink() and path.is_file()}
 
 
 def changes(before, after):
@@ -329,7 +320,7 @@ class Logger:
         proc = subprocess.run(["rtk", "proxy", "git", "rev-parse", "HEAD"],
                               cwd=self.root, capture_output=True, text=True)
         self.append("run_started", run_id, work_type,
-                    observed={"started_at": now(), "files": snapshot(self.root),
+                    observed={"started_at": now(), "files": snapshot(self.root, prune_generated=True), "snapshot_policy":"generated_pruned_v1",
                               "git_commit": proc.stdout.strip() if proc.returncode == 0 else UNKNOWN,
                               "python": sys.version.split()[0], "platform": sys.platform,
                               "logger_sha256": digest(Path(__file__).read_bytes()),
@@ -352,7 +343,7 @@ class Logger:
             guard_finish(self.root,run_id,end_reason=end_reason)
         if any(e["run_id"] == run_id and e["event_type"] == "run_finished" for e in self.read()):
             raise ValueError("run already finished")
-        observed = {"changed_files": changes(start["observed"]["files"], snapshot(self.root)),
+        observed = {"changed_files": changes(start["observed"]["files"], snapshot(self.root, prune_generated=start["observed"].get("snapshot_policy") == "generated_pruned_v1")),
                     "tokens": UNKNOWN, "cost": UNKNOWN}
         if finish:
             observed["ended_at"] = now()
@@ -360,13 +351,26 @@ class Logger:
                            start["work_type"], observed=observed, summary={"result": result, **({"end_reason": end_reason} if finish else {})})
 
     def command(self, run_id, command=None, task_id=UNKNOWN, agent_run_id=UNKNOWN,
-                attempt_id=UNKNOWN, command_kind=UNKNOWN, command_name=None):
+                attempt_id=UNKNOWN, command_kind=UNKNOWN, command_name=None,
+                preflight_timeout=60):
+        sys.path.insert(0, str(ROOT))
+        from harness.command_preflight import Preflight
+        with Preflight(self.root, preflight_timeout):
+            return self._command(run_id, command, task_id, agent_run_id, attempt_id,
+                                 command_kind, command_name)
+
+    def _command(self, run_id, command=None, task_id=UNKNOWN, agent_run_id=UNKNOWN,
+                 attempt_id=UNKNOWN, command_kind=UNKNOWN, command_name=None):
+        from harness.command_preflight import current, stage, PreflightTimeout
+        budget = current()
         state_path = self.root / '.harness/tasks/tasks.yaml'
-        policy_state = json.loads(state_path.read_text()) if state_path.exists() else {}
+        with stage('task_state'):
+            policy_state = json.loads(state_path.read_text()) if state_path.exists() else {}
         if policy_state.get('execution_policy') and task_id not in policy_state.get('tasks', {}):
             raise ValueError('strict managed commands require an explicit planned task')
-        if any(e["run_id"] == run_id and e["event_type"] == "run_finished" for e in self.read()):
-            raise ValueError("run already finished")
+        with stage('run_state'):
+            if any(e["run_id"] == run_id and e["event_type"] == "run_finished" for e in self.read()):
+                raise ValueError("run already finished")
         execution_run_id = run_id
         if task_id != UNKNOWN and agent_run_id != UNKNOWN and attempt_id != UNKNOWN:
             from harness.command_runs import execution_run
@@ -379,11 +383,14 @@ class Logger:
         if policy_state.get('execution_policy'):
             from harness.tasks import Tasks
             managed = Tasks(self.root, execution_run_id)
-            managed.require_dispatch(task_id)
-        start = self.run(run_id)
+            with stage('dispatch'):
+                managed.require_dispatch(task_id)
+        with stage('run_context'):
+            start = self.run(run_id)
         sys.path.insert(0, str(ROOT))
         from harness.sequential import command_context, validate_settings, KINDS
-        context, binding = command_context(self.root, run_id, task_id, agent_run_id, attempt_id)
+        with stage('command_context'):
+            context, binding = command_context(self.root, run_id, task_id, agent_run_id, attempt_id)
         cwd = self.root
         if command_name is not None:
             config_path = self.root / ".harness/settings/sequential.json"
@@ -404,9 +411,11 @@ class Logger:
         if not command or command[0] != "rtk":
             raise ValueError("wrapped commands must start with rtk")
         from harness.product_guard import authorize_command
-        authorize_command(self.root, policy_state, task_id, command, run_id=run_id)
-        before = snapshot(self.root)
-        call_id = str(uuid.uuid4())
+        with stage('command_authorization'):
+            authorize_command(self.root, policy_state, task_id, command, run_id=run_id)
+        with stage('snapshot_before'):
+            before = snapshot(self.root, prune_generated=True)
+        call_id = budget.call_id
         metadata = {**binding, "call_id": call_id, "command_kind": command_kind,
                     "command_name": command_name or UNKNOWN, "cwd": str(cwd.relative_to(self.root))}
         def guarded_code_state():
@@ -416,25 +425,63 @@ class Logger:
             from harness.tasks import Tasks
             from harness.development_tracking import capture
             return {'code_state_sha256': capture(Tasks(self.root, run_id), task)['state_sha256']}
-        self.append("command_started", run_id, start["work_type"],
-                    **context, observed={**metadata, **guarded_code_state(), "started_at": now(),
-                              "argv_sha256": digest(json.dumps(command).encode())})
+        with stage('code_fingerprint'):
+            code_state = guarded_code_state()
+        with stage('record_command_request'):
+            self.append("command_started", run_id, start["work_type"],
+                        **context, observed={**metadata, **code_state, "started_at": now(),
+                                  "launch_status": "REQUESTED", "argv_sha256": digest(json.dumps(command).encode())})
+        def spawned(child):
+            if not budget.spawned:
+                budget.spawned = True
+                budget.emit('SPAWNED', pid=child.pid)
+            self.append("command_process_spawned", run_id, start["work_type"],
+                **context, observed={**metadata, "spawned_at":now(), "pid":child.pid,
+                                    "preflight_elapsed_seconds":time.monotonic()-budget.started})
         timer = time.monotonic()
         try:
             if managed is not None:
                 from harness.execution_policy import managed_command
-                proc = managed_command(managed, task_id, command, cwd, text=False)
+                proc = managed_command(managed, task_id, command, cwd, text=False, on_spawn=spawned)
             else:
-                proc = subprocess.run(command, cwd=cwd, capture_output=True)
+                with stage('process_launch'):
+                    budget.stop_checks()
+                    child = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    spawned(child)
+                    stdout, stderr = child.communicate()
+                except BaseException:
+                    child.kill(); child.communicate()
+                    raise
+                proc = subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+        except PreflightTimeout as error:
+            # A timed-out check must not immediately perform the same unbounded
+            # snapshot again merely to report that timeout.
+            from harness.command_preflight import Preflight
+            budget.stop_checks()
+            try:
+                with Preflight(self.root, 2), stage('record_preflight_timeout'):
+                    self.append("command_finished", run_id, start["work_type"], **context,
+                        observed={**metadata, "ended_at":now(), "elapsed_seconds":time.monotonic()-timer,
+                                  "error_type":type(error).__name__, "error":str(error),
+                                  "returncode":UNKNOWN, "changed_files":UNKNOWN,
+                                  "launch_status":"SPAWNED" if budget.spawned else "NOT_SPAWNED"})
+            except Exception as reporting_error:
+                budget.emit('FINISH_EVENT_DEFERRED', error_type=type(reporting_error).__name__)
+            raise
         except (OSError, ValueError, KeyboardInterrupt) as error:
             self.append("command_finished", run_id, start["work_type"],
                         **context, observed={**metadata, "ended_at": now(), "elapsed_seconds": time.monotonic() - timer, "error_type": type(error).__name__,
-                                  "returncode": UNKNOWN, "changed_files": changes(before, snapshot(self.root))})
+                                  "returncode": UNKNOWN, "changed_files": changes(before, snapshot(self.root, prune_generated=True))})
             raise
+        with stage('snapshot_after'):
+            after = snapshot(self.root, prune_generated=True)
+        with stage('code_fingerprint_after'):
+            code_state = guarded_code_state()
         self.append("command_finished", run_id, start["work_type"],
-                    **context, observed={**metadata, **guarded_code_state(), "ended_at": now(), "elapsed_seconds": time.monotonic() - timer, "returncode": proc.returncode,
+                    **context, observed={**metadata, **code_state, "ended_at": now(), "elapsed_seconds": time.monotonic() - timer, "returncode": proc.returncode,
                               "stdout_sha256": digest(proc.stdout), "stderr_sha256": digest(proc.stderr),
-                              "changed_files": changes(before, snapshot(self.root))})
+                              "changed_files": changes(before, after)})
         sys.stdout.buffer.write(proc.stdout)
         sys.stderr.buffer.write(proc.stderr)
         return proc.returncode
@@ -689,6 +736,7 @@ def main():
     command.add_argument("--attempt-id", default=UNKNOWN)
     command.add_argument("--command-kind", default=UNKNOWN)
     command.add_argument("--command-name")
+    command.add_argument("--preflight-timeout", type=float, default=60.0)
     command.add_argument("argv", nargs=argparse.REMAINDER)
     sub.add_parser("status")
     args = parser.parse_args()
@@ -715,7 +763,7 @@ def main():
         logger.append(args.type, args.run_id, start["work_type"], summary={"text": args.summary})
     elif args.action == "command":
         sys.exit(logger.command(args.run_id, args.argv, args.task_id, args.agent_run_id,
-                                args.attempt_id, args.command_kind, args.command_name))
+                                args.attempt_id, args.command_kind, args.command_name, preflight_timeout=args.preflight_timeout))
     else:
         print(json.dumps(logger.status(), ensure_ascii=False))
 

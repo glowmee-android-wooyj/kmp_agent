@@ -49,6 +49,15 @@ class CommandOwnershipTests(unittest.TestCase):
         self.assertEqual(Path(first['process_owner']['receipt_path']).read_bytes(), original)
         self.assertEqual(len(self.m.read()['tasks']['T']['executions']), 1)
 
+    def test_repeated_claims_preserve_one_opening_basis_without_rescanning(self):
+        from harness.recovery import workspace_basis
+        with patch('harness.recovery.workspace_basis',wraps=workspace_basis) as capture:
+            self.assertEqual(self.command().returncode,0)
+            opening=copy.deepcopy(self.active()['recovery_start_basis'])
+            self.assertEqual(self.command().returncode,0)
+            self.assertEqual(capture.call_count,1)
+        self.assertEqual(self.active()['recovery_start_basis'],opening)
+
     def test_nonzero_normal_return_allows_authorized_retest(self):
         self.assertEqual(self.command(7).returncode, 7)
         self.assertEqual(self.command().returncode, 0)

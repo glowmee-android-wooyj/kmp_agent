@@ -11,6 +11,7 @@ if __name__ == '__main__' and not __package__:
     sys.path[:] = [p for p in sys.path if Path(p or '.').resolve() != ROOT / 'harness']
 sys.path.insert(0, str(ROOT))
 import bootstrap
+from harness.command_preflight import PreflightTimeout
 
 
 def main():
@@ -28,6 +29,7 @@ def main():
     parser.add_argument("--attempt-id", default="UNKNOWN")
     parser.add_argument("--command-name")
     parser.add_argument("--command-kind", default="UNKNOWN")
+    parser.add_argument("--preflight-timeout", type=float, default=60.0)
     parser.add_argument("--argv-json", help="Trusted rtk argv JSON; use instead of --command-name")
     parser.add_argument("--work-type", default="PRODUCT")
     parser.add_argument("--role", default="orchestrator")
@@ -134,7 +136,7 @@ def main():
                 result = logger.checkpoint(args.run_id, args.result, finish=True, end_reason=args.end_reason)
             else:
                 command_exit = logger.command(args.run_id, json.loads(args.argv_json) if args.argv_json else None,
-                    args.task_id or "UNKNOWN", args.agent_run_id, args.attempt_id, args.command_kind, args.command_name)
+                    args.task_id or "UNKNOWN", args.agent_run_id, args.attempt_id, args.command_kind, args.command_name, preflight_timeout=args.preflight_timeout)
                 result = {"returncode": command_exit}
         elif args.action in {"planning", "design", "development", "verification", "qa"}:
             manifest = bootstrap.read(target / bootstrap.MANIFEST)
@@ -164,7 +166,7 @@ def main():
         if args.action == "status":
             return 0 if result["connection"]["state"] == "VERIFIED" else 1
         return command_exit if command_exit is not None else 0
-    except (OSError, ValueError, SyntaxError, KeyError) as error:
+    except (OSError, ValueError, SyntaxError, KeyError, PreflightTimeout) as error:
         if args.action == 'update':
             # A rejected control FIFO/symlink must not be opened again by the
             # failure reporter. Do not infer identity from unverified metadata.
@@ -176,8 +178,12 @@ def main():
                     "register-execution-plan or revise-execution-plan, then configure-task-plan; bind-execution-session for a new run."
                     if args.action == 'task' else
                     "Use recover for an interrupted update; inspect source/ref, preserved settings and hook diagnostics.")
+        if args.action == 'command':
+            recovery = ("Inspect .harness/logs/command-preflight/<call_id>.jsonl for the last timed stage. "
+                        "Keep the existing approval, task and attempt; retry only after a clean pre-spawn abort, "
+                        "or use official task recovery if process ownership is uncertain.")
         print(json.dumps({**context, "result": "FAIL", "error_type": type(error).__name__,
-                          "cause": str(error) if isinstance(error, ValueError) else "Tool configuration operation failed",
+                          "cause": str(error) if isinstance(error, (ValueError, PreflightTimeout)) else "Tool configuration operation failed",
                           "recovery": recovery}, ensure_ascii=False))
         return 1
 

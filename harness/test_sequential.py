@@ -169,7 +169,10 @@ class TemporaryProjectCLI(unittest.TestCase):
     def test_approved_contract_transition_installed_command_flow(self):
         self._installed_command_flow(transition=True)
 
-    def _installed_command_flow(self, transition=False):
+    def test_prelaunch_timeout_then_retry_installed_command_flow(self):
+        self._installed_command_flow(preflight_retry=True)
+
+    def _installed_command_flow(self, transition=False, preflight_retry=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "applied project"
             root.mkdir()
@@ -215,6 +218,10 @@ else:
             # Unit-only native-store location; the real installed entrypoint still runs.
             shim=native.parent/'run_installed.py'
             shim.write_text("import runpy,sys,subprocess\nfrom pathlib import Path\nfrom unittest.mock import patch\nsys.path.insert(0,%r)\nentry=sys.argv[1];sys.argv=sys.argv[1:]\npatch('harness.decisions.native_store',return_value=Path(%r)).start()\noriginal_call=subprocess.call\ndef invoke(argv,**kwargs):\n    if len(argv)>1 and argv[1]==%r:\n        return original_call([sys.executable,__file__,*argv[1:]],**kwargs)\n    return original_call(argv,**kwargs)\nsubprocess.call=invoke\nrunpy.run_path(entry,run_name='__main__')\n" % (str(ROOT),str(native.parent),str(ROOT/'harness/cli.py')))
+            if preflight_retry:
+                text=shim.read_text()
+                text=text.replace("runpy.run_path(entry,run_name='__main__')", "from harness.execution_policy import WorkerGate\nimport time\noriginal_init=WorkerGate.__init__\ndef delayed_init(self,*args,**kwargs):\n    original_init(self,*args,**kwargs)\n    if Path(%r).exists(): time.sleep(10)\nWorkerGate.__init__=delayed_init\nrunpy.run_path(entry,run_name='__main__')" % str(root/'.harness/slow-preflight'))
+                shim.write_text(text)
             def cli(action, expected_exit=0, **options):
                 argv = ["rtk", "proxy", sys.executable, '-B',str(shim),str(root / ".kmp-agent/agent.py"), action]
                 for name, value in options.items():
@@ -373,6 +380,19 @@ else:
             self.assertFalse((root / 'outside/App.kt').exists())
             with self.assertRaisesRegex(ValueError, 'target_commands'):
                 authorize_command(root, manager.read(), 'T', ['unapproved-command'], run_id=run_id)
+            if preflight_retry:
+                flag=root/'.harness/slow-preflight';flag.write_text('Synthetic fault injection only')
+                import time
+                before_timeout=time.monotonic()
+                timed_out=cli('command',expected_exit=1,run_id=command_run_id,task_id='T',
+                    agent_run_id=run['agent_run_id'],attempt_id=run['attempt_id'],command_name='build',preflight_timeout=2)
+                self.assertEqual(timed_out['error_type'],'PreflightTimeout')
+                self.assertIn('worker_gate',timed_out['cause'])
+                self.assertIn('command-preflight',timed_out['recovery'])
+                self.assertLess(time.monotonic()-before_timeout,8)
+                self.assertFalse((root/'.harness/build.done').exists())
+                self.assertTrue(manager.read()['tasks']['T']['executions'][0]['command_prelaunch_aborts'])
+                flag.unlink()
             command_run_ids = []
             for name in ('build','test'):
                 command = 'python3 .kmp-agent/agent.py command --run-id ' + command_run_id + ' --task-id T --agent-run-id ' + run['agent_run_id'] + ' --attempt-id ' + run['attempt_id'] + ' --command-kind ' + name + " --argv-json '" + json.dumps(build_argv if name=='build' else test_argv) + "'"
@@ -424,9 +444,11 @@ else:
                         review_gate(manager,submitted,evidence)
             result = cli("collection-report")
             self.assertEqual(result["commands_without_links"], 0)
-            self.assertEqual(len(result['commands']),2)
-            self.assertTrue(all(c['returncode']['value']==0 and c['link']['status']=='COLLECTED' for c in result['commands']))
-            self.assertEqual([c['run_id'] for c in result['commands']],command_run_ids)
+            completed_commands=[c for c in result['commands'] if c.get('returncode',{}).get('value') == 0]
+            self.assertEqual(len(completed_commands),2)
+            self.assertEqual(len(result['commands']),3 if preflight_retry else 2)
+            self.assertTrue(all(c['returncode']['value']==0 and c['link']['status']=='COLLECTED' for c in completed_commands))
+            self.assertEqual([c['run_id'] for c in completed_commands],command_run_ids)
             execution = result["tasks"]["T"]["executions"][0]
             self.assertEqual(execution["files"]["value"][0]["path"], "src/App.kt")
             self.assertEqual(execution["observed_modules"]["value"]["src/App.kt"], ["app"])

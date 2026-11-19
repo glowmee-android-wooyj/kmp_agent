@@ -3,6 +3,8 @@
 No logger event or assistant interpretation can answer a required question.
 """
 import copy
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -19,6 +21,22 @@ def native_store():
     return (Path(pwd.getpwuid(os.getuid()).pw_dir) / '.codex' / 'sessions').resolve()
 
 
+_native_batch = ContextVar('native_record_batch', default=None)
+
+
+@contextmanager
+def native_record_batch():
+    """Reuse parsing only; every read still verifies the exact current bytes."""
+    if _native_batch.get() is not None:
+        yield
+        return
+    token = _native_batch.set({})
+    try:
+        yield
+    finally:
+        _native_batch.reset(token)
+
+
 def native_records(path, session_id):
     path = Path(path).resolve(strict=True)
     # Trust the actual user's native storage, never CODEX_HOME supplied by a worker.
@@ -29,7 +47,16 @@ def native_records(path, session_id):
         raise ValueError('canonical root session UUID required')
     raw = path.read_bytes()
     complete = raw[:raw.rfind(b'\n') + 1]
-    records = [json.loads(line) for line in complete.splitlines()]
+    batch = _native_batch.get()
+    key = (str(path), session_id, hashlib.sha256(complete).digest())
+    if batch is not None and batch.get('key') == key:
+        records = batch['records']
+    else:
+        records = [json.loads(line) for line in complete.splitlines()]
+        if batch is not None and len(complete) <= 128 * 1024 * 1024:
+            # Private readers in this query treat parsed records as read-only.
+            batch.clear()
+            batch.update(key=key, records=records)
     metas = [r.get('payload', {}) for r in records if r.get('type') == 'session_meta']
     if len(metas) != 1 or metas[0].get('id') != session_id:
         raise ValueError('native root session UUID mismatch')
@@ -206,11 +233,16 @@ def open_question(manager, question_id, question, affected_task_ids, options=Non
 
 def refresh_waits(manager, state):
     """New native dependency links immediately inherit the same question wait."""
-    from harness.execution_policy import pending
+    from harness.execution_policy import pending_scopes
+    if not any(task.get('state') != 'DONE' for task in state['tasks'].values()):
+        return
+    pending = pending_scopes(state)
     for tid, task in state['tasks'].items():
         if task['state'] == 'DONE':
             continue
-        for qid in pending(state, tid):
+        for qid, affected in pending.items():
+            if tid not in affected:
+                continue
             q = state['required_questions'][qid]
             if tid not in q['propagated_task_ids']:
                 q['propagated_task_ids'].append(tid)
