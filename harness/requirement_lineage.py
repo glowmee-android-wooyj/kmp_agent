@@ -145,14 +145,30 @@ def require_review(manager, target, allow_mock=False):
         raise ValueError('trial source approval cannot authorize a PRODUCT task')
     if comparison['scope'] == 'PRODUCT' and not comparison['authorization_ready']:
         raise ValueError('human authorization missing or stale; local approval labels and QA PASS are insufficient')
-    receipt = comparison['human_authorization'].get('receipt')
-    if receipt and target['task_id'] not in receipt.get('task_ids', []):
-        raise ValueError('human authorization belongs to another task')
     contract = manager.artifact(NAME)
     if not any(a.get('path') == NAME and a.get('sha256') == contract['sha256'] for a in target.get('inputs', [])):
         raise ValueError('development task must freeze the current lineage contract')
     expected = {x['id'] for x in criteria(manager.root)}
     state = manager.read()
+    receipt = comparison['human_authorization'].get('receipt')
+    if receipt and target['task_id'] not in receipt.get('task_ids', []):
+        # A follow-up can obtain its own exact native approval without rewriting
+        # the authorization locator in the already frozen contract.
+        from harness.approvals import human_approval
+        from harness.decisions import is_superseded
+        lineage = load(manager.root)
+        artifacts = {source['path']: source['sha256'] for source in lineage['sources']}
+        subject = approval_subject(lineage)
+        confirmations = [
+            confirmed for question_id, question in state.get('required_questions', {}).items()
+            if target['task_id'] in question.get('affected_task_ids', [])
+            and not is_superseded(state, question)
+            if (confirmed := human_approval(manager.root, state, question_id, target['task_id'],
+                                           'requirement_lineage', subject, artifacts))
+        ]
+        if len(confirmations) != 1:
+            raise ValueError('human authorization belongs to another task; one exact native approval for this task is required')
+        receipt = confirmations[0]
     for qa in state['tasks'].values():
         config = qa.get('qa_config', {})
         if qa.get('state') != 'DONE' or config.get('stage') != 'requirements' or config.get('target_task_id') != target['task_id']:
@@ -187,7 +203,8 @@ def require_review(manager, target, allow_mock=False):
                 continue
             if content.get('claim_scope') != comparison['scope']:
                 continue
-            return {'qa_task_id': qa['task_id'], 'qa_agent_run_id': run['agent_run_id'], 'comparison': comparison, 'synthetic': run.get('execution_mode') != 'independent_process'}
+            return {'qa_task_id': qa['task_id'], 'qa_agent_run_id': run['agent_run_id'], 'comparison': comparison,
+                    'task_authorization': receipt, 'synthetic': run.get('execution_mode') != 'independent_process'}
     raise ValueError('independent pre-development requirements QA missing or stale')
 
 
