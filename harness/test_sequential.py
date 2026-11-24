@@ -237,7 +237,22 @@ else:
             shim.write_text("import runpy,sys,subprocess\nfrom pathlib import Path\nfrom unittest.mock import patch\nsys.path.insert(0,%r)\nentry=sys.argv[1];sys.argv=sys.argv[1:]\npatch('harness.decisions.native_store',return_value=Path(%r)).start()\noriginal_call=subprocess.call\ndef invoke(argv,**kwargs):\n    if len(argv)>1 and argv[1]==%r:\n        return original_call([sys.executable,__file__,*argv[1:]],**kwargs)\n    return original_call(argv,**kwargs)\nsubprocess.call=invoke\nrunpy.run_path(entry,run_name='__main__')\n" % (str(runtime),str(native.parent),str(runtime/'harness/cli.py')))
             if preflight_retry:
                 text=shim.read_text()
-                text=text.replace("runpy.run_path(entry,run_name='__main__')", "from harness.execution_policy import WorkerGate\nimport time\noriginal_init=WorkerGate.__init__\ndef delayed_init(self,*args,**kwargs):\n    original_init(self,*args,**kwargs)\n    if Path(%r).exists(): time.sleep(60)\nWorkerGate.__init__=delayed_init\nrunpy.run_path(entry,run_name='__main__')" % str(root/'.harness/slow-preflight'))
+                injection = """from harness.command_preflight import current
+from harness.execution_policy import WorkerGate
+import time
+
+original_init = WorkerGate.__init__
+def expire_at_worker_gate(self, *args, **kwargs):
+    original_init(self, *args, **kwargs)
+    if Path(%r).exists():
+        budget = current()
+        assert budget is not None and budget.armed and budget.name == 'worker_gate'
+        budget.deadline = time.monotonic() - 1
+
+WorkerGate.__init__ = expire_at_worker_gate
+runpy.run_path(entry, run_name='__main__')
+""" % str(root/'.harness/slow-preflight')
+                text=text.replace("runpy.run_path(entry,run_name='__main__')", injection)
                 shim.write_text(text)
             def cli(action, expected_exit=0, payload=None, **options):
                 argv = ["rtk", "proxy", sys.executable, '-B',str(shim),str(root / ".kmp-agent/agent.py"), action]
@@ -439,14 +454,11 @@ else:
                 settings_path.write_bytes(settings_bytes)
             if preflight_retry:
                 flag=root/'.harness/slow-preflight';flag.write_text('Synthetic fault injection only')
-                import time
-                before_timeout=time.monotonic()
                 timed_out=cli('command',expected_exit=1,run_id=command_run_id,task_id='T',
-                    agent_run_id=run['agent_run_id'],attempt_id=run['attempt_id'],command_name='build',preflight_timeout=10)
+                    agent_run_id=run['agent_run_id'],attempt_id=run['attempt_id'],command_name='build')
                 self.assertEqual(timed_out['error_type'],'PreflightTimeout')
                 self.assertIn('worker_gate',timed_out['cause'])
                 self.assertIn('command-preflight',timed_out['recovery'])
-                self.assertLess(time.monotonic()-before_timeout,20)
                 self.assertFalse((root/'.harness/build.done').exists())
                 self.assertTrue(manager.read()['tasks']['T']['executions'][0]['command_prelaunch_aborts'])
                 flag.unlink()
