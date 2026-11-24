@@ -897,9 +897,11 @@ class Tasks:
         from harness.stage_readiness import bind_inputs
         return bind_inputs(self,task_id,inputs,reason)
 
-    def return_to_stage(self,feature_id,stage,reason,evidence,source_task_id=None,source_review_id=None):
+    def return_to_stage(self,feature_id,stage,reason,evidence,source_task_id=None,source_review_id=None,
+                        retry_approval_question_id=None):
         from harness.stage_readiness import return_to_stage
-        return return_to_stage(self,feature_id,stage,reason,evidence,source_task_id,source_review_id)
+        return return_to_stage(self,feature_id,stage,reason,evidence,source_task_id,source_review_id,
+                               retry_approval_question_id)
 
     def route_issue(self, **data):
         from harness.findings import route
