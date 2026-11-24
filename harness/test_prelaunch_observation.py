@@ -99,7 +99,7 @@ class ObservationTests(unittest.TestCase):
         self.assertFalse(checkpoint['observed']['changed_files'])
 
     def test_qa_source_manifest_excludes_generated_cache_links_only(self):
-        from harness.qa import manifest
+        from harness.qa import manifest, scoped_manifest
 
         self.git('init', '-q')
         (self.root / '.gitignore').write_text('/.konan-local/\n')
@@ -111,6 +111,10 @@ class ObservationTests(unittest.TestCase):
         self.assertNotIn('.konan-local/link', captured)
         self.assertEqual(captured['source-link'], 'SYMLINK:source-target')
         self.assertIn('.konan-local/link', manifest(self.root))
+        scope = {'mode': 'target_paths', 'paths': ['.konan-local']}
+        self.assertIn('.konan-local/link', scoped_manifest(self.root, scope))
+        scope['scan_policy'] = 'generated_pruned_v2'
+        self.assertNotIn('.konan-local/link', scoped_manifest(self.root, scope))
 
     def test_verification_ownership_remains_strict_inside_ignored_generated_paths(self):
         from types import SimpleNamespace

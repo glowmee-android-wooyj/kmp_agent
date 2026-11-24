@@ -136,7 +136,10 @@ def target_scope(target,original_requests):
 
 
 def scoped_manifest(root,scope,generated_paths=()):
-    content=manifest(root,generated_paths,prune_build_outputs=True)
+    policy = scope.get('scan_policy')
+    if policy not in {None, 'generated_pruned_v2'}:
+        raise ValueError('unknown QA source scan policy')
+    content=manifest(root,generated_paths,prune_build_outputs=policy is not None)
     if scope.get('mode')!='target_paths':return content
     paths=scope['paths']
     return {p:sha for p,sha in content.items() if any(p==base or p.startswith(base+'/') for base in paths)}
@@ -228,6 +231,7 @@ class QA:
         if stage=='requirements':
             if not lineage_path.exists():raise ValueError('requirements QA requires typed lineage')
             scope={'mode':'target_paths','paths':list(dict.fromkeys(['requirement-lineage.json']+[s['path'] for s in lineage['sources']])),'basis':'source and derivation scope; implementation changes do not invalidate source alignment'}
+        scope['scan_policy'] = 'generated_pruned_v2'
         config={'generated_paths':generated,'repair_criteria':copy.deepcopy(links),'repair_criteria_definitions':{c['id']:copy.deepcopy(c) for c in state['tasks'].get(repair_task_id,{}).get('criteria',[]) if c['id'] in links},'context_artifacts':context_refs,'images':image_refs,'manifest_scope':scope,'stage':stage,'executable':executable,'timeout':timeout,'target_task_id':target_task_id,'original_requests':refs,'commands':commands,'repair_task_id':repair_task_id,'target_manifest':scoped_manifest(self.root,scope,generated),'target_baseline':copy.deepcopy(target.get('development_tracking',{}).get('baselines',target.get('inputs',[]))),'attempts':[]}
         def op(s):
             t=s['tasks'][task_id];t['qa_config']=config
@@ -533,7 +537,9 @@ class QA:
             def rebase(s):
                 t=s['tasks'][task_id];before_inputs=copy.deepcopy(t['inputs']);t['inputs']=refs
                 t.setdefault('input_rebases',[]).append({'before':before_inputs,'after':copy.deepcopy(refs),'reason':'owner repair followed by fresh QA retest','repair_evidence':proof})
-                scope=target_scope(target,t['qa_config']['original_requests']);t['qa_config']['manifest_scope']=scope;t['qa_config']['target_manifest']=scoped_manifest(self.root,scope,generated);t['qa_config']['target_baseline']=target_baseline
+                scope=target_scope(target,t['qa_config']['original_requests'])
+                scope['scan_policy'] = 'generated_pruned_v2'
+                t['qa_config']['manifest_scope']=scope;t['qa_config']['target_manifest']=scoped_manifest(self.root,scope,generated);t['qa_config']['target_baseline']=target_baseline
                 t['qa_config']['attempts'][-1]['repair']={'status':'REPORTED_COMPLETE_NOT_VERIFIED','evidence':proof}
                 t['qa_config'].setdefault('retest_bases',[]).append({'manifest':scoped_manifest(self.root,scope,generated),'manifest_scope':scope,'inputs':copy.deepcopy(refs),'baseline':target_baseline,'repair':proof})
                 self.tasks._event(s,'qa_retest_inputs_rebased',t,observed={'before':before_inputs,'after':refs,'repair':proof})
