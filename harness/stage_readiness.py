@@ -76,7 +76,7 @@ def assess(root,state,feature_id):
         missing=sorted(k for k in required if result.get(k,{}).get('result')!='PASS')
         open_issues=[i for i in state.get('issues',[]) if i.get('feature_id')==feature_id and is_blocking(i) and i.get('assigned_task_id',i.get('task_id')) in c['task_history']]
         attempts=sum(sum(r.get('kind')=='work' for r in state['tasks'][tid].get('executions',[])) for tid in c['task_history'])
-        limit=state['tasks'][c['task_history'][0]]['max_attempts']
+        limit=_stage_attempt_limit(state, c['task_history'])
         reasons=[];status='PASS'
         if t.get('role')!=ROLES[name] or t.get('execution_scope')!='documentation' or not set(c['checks'].values())<=required:status='UNKNOWN';reasons.append('이 단계의 목적·필수 검토 정의가 등록 계약과 다름')
         elif len(basis)!=STAGES.index(name):status='WAITING_UPSTREAM';reasons.append('선행 단계의 보완·재검토가 먼저 필요')
@@ -134,7 +134,7 @@ def gate(manager,state,task,review_results=None):
     if (task.get('project_id'),task['work_type'])!=(origin.get('project_id'),origin['work_type']):return '단계 승인 범위의 프로젝트·작업 종류와 불일치'
     if target and review_results is None:
         history=flow['stages'][target]['task_history'];attempts=sum(sum(r.get('kind')=='work' for r in state['tasks'][tid].get('executions',[])) for tid in history)
-        if attempts>=state['tasks'][history[0]]['max_attempts']:return '단계 전체 재시도 한도 도달; 이전 검토를 덮거나 무한 재시도하지 않음'
+        if attempts>=_stage_attempt_limit(state, history):return '단계 전체 재시도 한도 도달; 이전 검토를 덮거나 무한 재시도하지 않음'
     if review_results is not None and any(r['result']!='PASS' for r in review_results):return None
     assessment=assess(manager.root,state,task['feature_id'])
     required=STAGES if code else STAGES[:STAGES.index(target)]
@@ -170,6 +170,11 @@ def bind_inputs(manager,task_id,inputs,reason):
     return manager._mutate('bind_stage_inputs',op,task_id)
 
 
+def _stage_attempt_limit(state, history):
+    # A reviewable stage needs room for its initial submission and one correction.
+    return max(2, state['tasks'][history[0]]['max_attempts'])
+
+
 def return_to_stage(manager,feature_id,stage,reason,evidence,source_task_id=None,source_review_id=None):
     def op(state):
         c=state['stage_workflows'][feature_id]['stages'][stage];old=state['tasks'][c['task_id']]
@@ -182,7 +187,7 @@ def return_to_stage(manager,feature_id,stage,reason,evidence,source_task_id=None
             'source_task_id':source_task_id,'source_review_id':source_review_id}
         findings.append(issue)
         attempts=sum(sum(r.get('kind')=='work' for r in state['tasks'][tid].get('executions',[])) for tid in c['task_history'])
-        if attempts>=state['tasks'][c['task_history'][0]]['max_attempts']:
+        if attempts>=_stage_attempt_limit(state, c['task_history']):
             manager._event(state,'stage_rework_limit_reached',old,observed={'stage':stage,'issue_id':issue_id},summary={'reason':reason})
             return {'status':'BLOCKED_RETRY_LIMIT','issue_id':issue_id}
         # A revision preserves the accepted old task and evidence rather than reopening it as if unreviewed.

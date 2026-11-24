@@ -90,6 +90,23 @@ class StageReadinessTest(unittest.TestCase):
         self.assertEqual(status['status'],'BLOCKED_RETRY_LIMIT');self.assertTrue(status['requires_human'])
         with self.assertRaisesRegex(ValueError,'한도'):self.t.begin(self.t.read()['stage_workflows']['F']['stages']['planning']['task_id'],'planning')
 
+    def test_legacy_one_attempt_stage_allows_one_correction(self):
+        self.approve('planning')
+        self.approve('design')
+        state = self.t.read()
+        state['tasks']['development_plan']['max_attempts'] = 1
+        self.t._save(state)
+        self.approve('development_plan', fail='development_plan-verification_commands')
+        state = self.t.read()
+        stage = state['stage_workflows']['F']['stages']['development_plan']
+        self.assertEqual(stage['task_history'], ['development_plan', 'development_plan.R1'])
+        self.assertEqual(state['tasks']['development_plan']['max_attempts'], 1)
+        self.assertEqual(state['tasks']['development_plan.R1']['state'], 'READY')
+        self.approve('development_plan', fail='development_plan-verification_commands')
+        status = assess(self.root, self.t.read(), 'F')['stages'][-1]
+        self.assertEqual((status['status'], status['attempts'], status['limit']),
+                         ('BLOCKED_RETRY_LIMIT', 2, 2))
+
     def test_last_allowed_attempt_is_not_prematurely_reported_exhausted(self):
         state=self.t.read();state['tasks']['planning']['max_attempts']=1;self.t._save(state)
         self.t.ready('planning');self.t.begin('planning','planning')
