@@ -319,6 +319,22 @@ class ExecutionPolicyTests(unittest.TestCase):
             managed_command(self.m, 'T', [sys.executable, '-c', 'import time; time.sleep(20)'], self.root, 30)
         thread.join(); self.assertLess(time.monotonic() - started, 5)
 
+    def test_worker_rechecks_capture_failure_and_distinguishes_approval_wait(self):
+        from harness.decisions import ApprovalCaptureError
+
+        error = ApprovalCaptureError('T: working code changed during capture')
+        watch = WorkerGate(self.m, 'T')
+        with patch('harness.execution_policy.pending', side_effect=[error, []]) as pending:
+            watch.check()
+            self.assertEqual(pending.call_count, 2)
+        with patch('harness.execution_policy.pending', side_effect=error) as pending:
+            with self.assertRaisesRegex(ValueError, 'approval workspace inspection failed'):
+                watch.check()
+            self.assertEqual(pending.call_count, 3)
+        with patch('harness.execution_policy.pending', return_value=['Q1']):
+            with self.assertRaisesRegex(ValueError, 'human answer pending.*Q1'):
+                watch.check()
+
     def test_direct_managed_command_needs_plan_and_question_interrupts_descendants(self):
         self.activate()
         with self.assertRaisesRegex(ValueError, 'explicit planned task'):

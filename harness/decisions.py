@@ -22,6 +22,20 @@ def native_store():
 
 
 _native_batch = ContextVar('native_record_batch', default=None)
+_report_capture_errors = ContextVar('report_approval_capture_errors', default=False)
+
+
+class ApprovalCaptureError(RuntimeError):
+    """Current approval evidence could not be inspected."""
+
+
+@contextmanager
+def report_capture_errors():
+    token = _report_capture_errors.set(True)
+    try:
+        yield
+    finally:
+        _report_capture_errors.reset(token)
 
 
 @contextmanager
@@ -103,7 +117,12 @@ def _task_basis(state, root, ids, include_code=False):
             task = state['tasks'][tid]
             tracking = task.get('development_tracking')
             if tracking:
-                observed = capture(SimpleNamespace(root=root), task)
+                try:
+                    observed = capture(SimpleNamespace(root=root), task)
+                except (ValueError, OSError) as error:
+                    if _report_capture_errors.get():
+                        raise ApprovalCaptureError(f'{tid}: {error}') from error
+                    raise
                 result[tid]['code_basis'] = {'state_sha256': observed['state_sha256'],
                     'scope': observed['scope'], 'code_paths': copy.deepcopy(tracking.get('code_paths')),
                     'scope_policy': tracking.get('scope_policy')}
