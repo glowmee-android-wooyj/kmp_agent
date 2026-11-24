@@ -827,16 +827,14 @@ class Tasks:
             latest_review = source["reviews"][-1]["agent_run_id"] if source["reviews"] else None
             if source.get("validation_status", {}).get(latest_review, {}).get("state") == "RECHECK_REQUIRED":
                 raise ValueError("development validation requires recheck before handoff")
-            from harness.stage_readiness import current_dependencies
-            dependencies = current_dependencies(state, target)
-            if source["state"] != "DONE" or target["state"] != "TODO" or source_id not in dependencies:
+            if source["state"] != "DONE" or target["state"] != "TODO" or source_id not in target["dependencies"]:
                 raise ValueError("handoff requires reviewed source and dependent TODO target")
             if source["feature_id"] != target["feature_id"]:
                 raise ValueError("feature mismatch")
             from harness.findings import blocking
             if blocking(state, source):
                 raise ValueError("unresolved blocking findings prevent handoff")
-            if any(state["tasks"][d]["state"] != "DONE" for d in dependencies):
+            if any(state["tasks"][d]["state"] != "DONE" for d in target["dependencies"]):
                 raise ValueError("unfinished target dependency")
             from harness.ui_applicability import validate as validate_ui
             nonvisual = validate_ui(self, source, reviewed=True)
