@@ -339,14 +339,14 @@ class Tasks:
                 raise ValueError('excluded Todo is not complete or executable; record an applicability decision first')
             if task.get('verification_required') and not task.get('verification_contract'):
                 raise ValueError('required verification contract missing before ready')
-            from harness.stage_readiness import gate as readiness_gate
+            from harness.stage_readiness import current_dependencies, gate as readiness_gate
             reason=readiness_gate(self,state,task)
             if reason:raise ValueError(reason)
             if task["state"] not in {"TODO", "BLOCKED"}:
                 raise ValueError("ready requires TODO or BLOCKED")
             if any(r["ended_at"] is None for r in task["executions"]):
                 raise ValueError("active checkpoint must be resumed or failed first")
-            if any(state["tasks"][d]["state"] != "DONE" for d in task["dependencies"]):
+            if any(state["tasks"][d]["state"] != "DONE" for d in current_dependencies(state, task)):
                 raise ValueError("unfinished dependency")
             if not all(self._valid_artifact(a) for a in task["inputs"]):
                 raise ValueError("invalid input snapshot")
@@ -827,14 +827,16 @@ class Tasks:
             latest_review = source["reviews"][-1]["agent_run_id"] if source["reviews"] else None
             if source.get("validation_status", {}).get(latest_review, {}).get("state") == "RECHECK_REQUIRED":
                 raise ValueError("development validation requires recheck before handoff")
-            if source["state"] != "DONE" or target["state"] != "TODO" or source_id not in target["dependencies"]:
+            from harness.stage_readiness import current_dependencies
+            dependencies = current_dependencies(state, target)
+            if source["state"] != "DONE" or target["state"] != "TODO" or source_id not in dependencies:
                 raise ValueError("handoff requires reviewed source and dependent TODO target")
             if source["feature_id"] != target["feature_id"]:
                 raise ValueError("feature mismatch")
             from harness.findings import blocking
             if blocking(state, source):
                 raise ValueError("unresolved blocking findings prevent handoff")
-            if any(state["tasks"][d]["state"] != "DONE" for d in target["dependencies"]):
+            if any(state["tasks"][d]["state"] != "DONE" for d in dependencies):
                 raise ValueError("unfinished target dependency")
             from harness.ui_applicability import validate as validate_ui
             nonvisual = validate_ui(self, source, reviewed=True)

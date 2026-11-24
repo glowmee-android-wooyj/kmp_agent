@@ -175,6 +175,17 @@ def _stage_attempt_limit(state, history):
     return max(2, state['tasks'][history[0]]['max_attempts'])
 
 
+def current_dependencies(state, task):
+    workflow = state.get('stage_workflows', {}).get(task['feature_id'], {})
+    replacements = {
+        previous: stage['task_id']
+        for stage in workflow.get('stages', {}).values()
+        if task['task_id'] not in stage['task_history']
+        for previous in stage['task_history']
+    }
+    return [replacements.get(dependency, dependency) for dependency in task['dependencies']]
+
+
 def return_to_stage(manager,feature_id,stage,reason,evidence,source_task_id=None,source_review_id=None):
     def op(state):
         c=state['stage_workflows'][feature_id]['stages'][stage];old=state['tasks'][c['task_id']]

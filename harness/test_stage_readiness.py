@@ -107,6 +107,23 @@ class StageReadinessTest(unittest.TestCase):
         self.assertEqual((status['status'], status['attempts'], status['limit']),
                          ('BLOCKED_RETRY_LIMIT', 2, 2))
 
+    def test_existing_dependent_can_start_after_revised_plan_passes(self):
+        self.approve('planning')
+        self.approve('design')
+        state = self.t.read()
+        state['tasks']['CODE']['dependencies'] = ['development_plan']
+        self.t._save(state)
+        self.approve('development_plan', fail='development_plan-verification_commands')
+        with self.assertRaises(ValueError):
+            self.t.ready('CODE')
+        self.assertEqual(self.approve('development_plan'), 'development_plan.R1')
+        self.t.bind_stage_inputs('CODE', ['req.md', 'planning.md', 'design.md', 'development_plan.md'],
+                                 'bind reviewed revision')
+        self.t.ready('CODE')
+        state = self.t.read()
+        self.assertEqual(state['tasks']['CODE']['state'], 'READY')
+        self.assertEqual(state['tasks']['CODE']['dependencies'], ['development_plan'])
+
     def test_last_allowed_attempt_is_not_prematurely_reported_exhausted(self):
         state=self.t.read();state['tasks']['planning']['max_attempts']=1;self.t._save(state)
         self.t.ready('planning');self.t.begin('planning','planning')
