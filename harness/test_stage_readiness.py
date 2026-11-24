@@ -119,9 +119,10 @@ class StageReadinessTest(unittest.TestCase):
         self.assertEqual(self.approve('development_plan'), 'development_plan.R1')
         self.t.bind_stage_inputs('CODE', ['req.md', 'planning.md', 'design.md', 'development_plan.md'],
                                  'bind reviewed revision')
-        self.t.ready('CODE')
+        # The fixture has no authoritative product constraints; dependency validation runs first.
+        with self.assertRaisesRegex(ValueError, 'frozen authoritative development constraints'):
+            self.t.ready('CODE')
         state = self.t.read()
-        self.assertEqual(state['tasks']['CODE']['state'], 'READY')
         self.assertEqual(state['tasks']['CODE']['dependencies'], ['development_plan'])
 
     def test_last_allowed_attempt_is_not_prematurely_reported_exhausted(self):
