@@ -460,7 +460,14 @@ runpy.run_path(entry, run_name='__main__')
                 self.assertIn('worker_gate',timed_out['cause'])
                 self.assertIn('command-preflight',timed_out['recovery'])
                 self.assertFalse((root/'.harness/build.done').exists())
-                self.assertTrue(manager.read()['tasks']['T']['executions'][0]['command_prelaunch_aborts'])
+                execution=manager.read()['tasks']['T']['executions'][0]
+                diagnostics = [
+                    row for path in (root/'.harness/logs/command-preflight').glob('*.jsonl')
+                    for row in map(json.loads, path.read_text().splitlines())
+                    if row['state'] == 'CLEANUP_DEFERRED'
+                    or row['stage'] == 'abort_ownership_cleanup'
+                ]
+                self.assertTrue(execution.get('command_prelaunch_aborts'), diagnostics)
                 flag.unlink()
             command_run_ids = []
             for name in ('build','test'):
