@@ -63,12 +63,31 @@ class ObservationTests(unittest.TestCase):
         self.assertNotIn('scan_policy',legacy)
         new=workspace_basis(manager,task)
         self.assertNotIn('build/cache',new['files'])
-        self.assertEqual(new['scan_policy'],'generated_pruned_v1')
+        self.assertEqual(new['scan_policy'],'generated_pruned_v2')
         current,reason=_safe_basis(manager,{},task,{'recovery_start_basis':legacy})
         self.assertIsNotNone(current);self.assertIsNone(reason)
         cache.write_text('changed')
         current,reason=_safe_basis(manager,{},task,{'recovery_start_basis':legacy})
         self.assertIsNone(current);self.assertIn('workspace changed',reason)
+
+    def test_new_recovery_basis_prunes_only_ignored_root_build_caches(self):
+        from types import SimpleNamespace
+        from harness.recovery import workspace_basis
+
+        self.git('init', '-q')
+        (self.root / '.gitignore').write_text('/.gradle-local/\n/.konan-local/\n')
+        for name in ('.gradle-local', '.konan-local', '.xcode-derived'):
+            directory = self.root / name
+            directory.mkdir()
+            (directory / 'entry').write_text('data')
+        self.git('add', '-f', '.konan-local/entry')
+        manager = SimpleNamespace(root=self.root)
+        old = workspace_basis(manager, {}, reference={'scan_policy': 'generated_pruned_v1'})
+        new = workspace_basis(manager, {})
+        self.assertIn('.gradle-local/entry', old['files'])
+        self.assertNotIn('.gradle-local/entry', new['files'])
+        self.assertIn('.konan-local/entry', new['files'])
+        self.assertIn('.xcode-derived/entry', new['files'])
 
     def test_legacy_run_checkpoint_does_not_invent_generated_file_deletion(self):
         self.git('init','-q');(self.root/'.gitignore').write_text('build/\n')

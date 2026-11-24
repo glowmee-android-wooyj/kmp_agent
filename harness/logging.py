@@ -88,11 +88,13 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def snapshot(root, *, prune_generated=False):
+def snapshot(root, *, prune_generated=False, prune_root_build_caches=False):
     from harness.workspace_scan import paths
     root = Path(root)
     return {str(path.relative_to(root)): digest(path.read_bytes())
-            for path in paths(root, prune_generated=prune_generated) if not path.is_symlink() and path.is_file()}
+            for path in paths(root, prune_generated=prune_generated,
+                              prune_root_build_caches=prune_root_build_caches)
+            if not path.is_symlink() and path.is_file()}
 
 
 def changes(before, after):
@@ -415,7 +417,7 @@ class Logger:
         with stage('command_authorization'):
             authorize_command(self.root, policy_state, task_id, command, run_id=run_id)
         with stage('snapshot_before'):
-            before = snapshot(self.root, prune_generated=True)
+            before = snapshot(self.root, prune_generated=True, prune_root_build_caches=True)
         call_id = budget.call_id
         metadata = {**binding, "call_id": call_id, "command_kind": command_kind,
                     "command_name": command_name or UNKNOWN, "cwd": str(cwd.relative_to(self.root))}
@@ -473,10 +475,11 @@ class Logger:
         except (OSError, ValueError, KeyboardInterrupt) as error:
             self.append("command_finished", run_id, start["work_type"],
                         **context, observed={**metadata, "ended_at": now(), "elapsed_seconds": time.monotonic() - timer, "error_type": type(error).__name__,
-                                  "returncode": UNKNOWN, "changed_files": changes(before, snapshot(self.root, prune_generated=True))})
+                                  "returncode": UNKNOWN, "changed_files": changes(before, snapshot(
+                                      self.root, prune_generated=True, prune_root_build_caches=True))})
             raise
         with stage('snapshot_after'):
-            after = snapshot(self.root, prune_generated=True)
+            after = snapshot(self.root, prune_generated=True, prune_root_build_caches=True)
         with stage('code_fingerprint_after'):
             code_state = guarded_code_state()
         self.append("command_finished", run_id, start["work_type"],

@@ -3,9 +3,10 @@ import os
 from pathlib import Path
 
 GENERATED = {'build', 'node_modules', '.gradle', '.kotlin', 'dist'}
+ROOT_BUILD_CACHES = {'.gradle-local', '.konan-local', '.xcode-derived'}
 
 
-def paths(root, *, prune_generated=True):
+def paths(root, *, prune_generated=True, prune_root_build_caches=False):
     root = Path(root)
     protected = None
     inspected = False
@@ -44,6 +45,8 @@ def paths(root, *, prune_generated=True):
                 yield path
                 continue
             candidate = name in GENERATED or relative.parts == ('tools', '.runtime')
+            if prune_root_build_caches and len(relative.parts) == 1 and name in ROOT_BUILD_CACHES:
+                candidate = True
             if prune_generated and candidate and generated_only(relative):
                 continue
             kept.append(name)
