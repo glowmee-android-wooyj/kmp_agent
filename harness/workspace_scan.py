@@ -6,6 +6,27 @@ GENERATED = {'build', 'node_modules', '.gradle', '.kotlin', 'dist'}
 ROOT_BUILD_CACHES = {'.gradle-local', '.konan-local', '.xcode-derived'}
 
 
+def protected_git_paths(root):
+    from harness.tracking_io import run_git
+    result = run_git(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard')
+    if result.returncode:
+        return None
+    protected = set()
+    for name in result.stdout.decode().split('\0'):
+        if name:
+            item = Path(name)
+            protected.add(item.as_posix())
+            protected.update(parent.as_posix() for parent in item.parents)
+    return protected
+
+
+def generated_directory(relative, protected, *, include_root_build_caches=False):
+    eligible = relative.name in GENERATED or relative.parts == ('tools', '.runtime')
+    if include_root_build_caches and len(relative.parts) == 1 and relative.name in ROOT_BUILD_CACHES:
+        eligible = True
+    return eligible and protected is not None and relative.as_posix() not in protected
+
+
 def paths(root, *, prune_generated=True, prune_root_build_caches=False):
     root = Path(root)
     protected = None
@@ -14,18 +35,11 @@ def paths(root, *, prune_generated=True, prune_root_build_caches=False):
     def generated_only(relative):
         nonlocal protected, inspected
         if not inspected:
-            from harness.tracking_io import run_git
-            result = run_git(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard')
+            protected = protected_git_paths(root)
             inspected = True
-            if result.returncode == 0:
-                protected = set()
-                for name in result.stdout.decode().split('\0'):
-                    if name:
-                        item = Path(name)
-                        protected.add(item.as_posix())
-                        protected.update(parent.as_posix() for parent in item.parents)
         # A failed Git inspection never becomes permission to omit source.
-        return protected is not None and relative.as_posix() not in protected
+        return generated_directory(relative, protected,
+                                   include_root_build_caches=prune_root_build_caches)
 
     def failed(error):
         raise error

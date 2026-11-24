@@ -98,6 +98,20 @@ class ObservationTests(unittest.TestCase):
         checkpoint=logger.checkpoint('legacy-run','Synthetic legacy continuity')
         self.assertFalse(checkpoint['observed']['changed_files'])
 
+    def test_qa_source_manifest_excludes_generated_cache_links_only(self):
+        from harness.qa import manifest
+
+        self.git('init', '-q')
+        (self.root / '.gitignore').write_text('/.konan-local/\n')
+        cache = self.root / '.konan-local'
+        cache.mkdir()
+        (cache / 'link').symlink_to('cache-target')
+        (self.root / 'source-link').symlink_to('source-target')
+        captured = manifest(self.root, prune_build_outputs=True)
+        self.assertNotIn('.konan-local/link', captured)
+        self.assertEqual(captured['source-link'], 'SYMLINK:source-target')
+        self.assertIn('.konan-local/link', manifest(self.root))
+
     def test_verification_ownership_remains_strict_inside_ignored_generated_paths(self):
         from types import SimpleNamespace
         from harness.verification import submission_gate
