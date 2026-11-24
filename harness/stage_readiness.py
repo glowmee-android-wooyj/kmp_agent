@@ -178,9 +178,11 @@ def _stage_attempt_limit(state, history):
 def current_dependencies(state, task):
     from harness.development_tracking import execution_scope
 
-    workflow = state.get('stage_workflows', {}).get(task['feature_id'], {})
+    workflow = state.get('stage_workflows', {}).get(task.get('feature_id'), {})
     stages = workflow.get('stages', {})
     dependencies = task.get('dependencies', [])
+    if not stages:
+        return dependencies
     if execution_scope(task) != 'code_implementation' and not any(
             stage['task_id'] == task['task_id'] for stage in stages.values()):
         return dependencies

@@ -91,9 +91,9 @@ def digest(data):
 def snapshot(root, *, prune_generated=False, prune_root_build_caches=False):
     from harness.workspace_scan import paths
     root = Path(root)
+    options = {'prune_root_build_caches': True} if prune_root_build_caches else {}
     return {str(path.relative_to(root)): digest(path.read_bytes())
-            for path in paths(root, prune_generated=prune_generated,
-                              prune_root_build_caches=prune_root_build_caches)
+            for path in paths(root, prune_generated=prune_generated, **options)
             if not path.is_symlink() and path.is_file()}
 
 
