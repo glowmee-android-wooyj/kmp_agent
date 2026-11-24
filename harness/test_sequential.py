@@ -71,6 +71,38 @@ class SequentialTests(unittest.TestCase):
         self.assertTrue(report["baseline_id"]["value"].startswith("sha256:"))
         self.assertEqual(report["feature_version"]["value"], "feature-r1")
 
+    def test_role_snapshot_prunes_ignored_root_caches_and_preserves_v1(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".gitignore").write_text("/.gradle-local/\n/.konan-local/\n/.xcode-derived/\n")
+        caches = [".gradle-local/cache", ".konan-local/cache", ".xcode-derived/cache"]
+        for path in caches:
+            cache = self.root / path
+            cache.parent.mkdir()
+            cache.write_text("initial")
+        tracked = ".gradle-local/tracked-source"
+        (self.root / tracked).write_text("keep")
+        subprocess.run(["git", "-C", str(self.root), "add", "-f", tracked], check=True)
+        self.register()
+        run = self.start()
+        collection = run["collection"]
+        self.assertEqual(collection["snapshot_policy"], "generated_pruned_v2")
+        self.assertIn(caches[0], collection["files_start"])
+        self.assertNotIn(caches[1], collection["files_start"])
+        self.assertNotIn(caches[2], collection["files_start"])
+
+        legacy = copy.deepcopy(run)
+        legacy["collection"]["snapshot_policy"] = "generated_pruned_v1"
+        legacy["collection"]["files_start"] = seq.log.snapshot(self.root, prune_generated=True)
+        (self.root / caches[1]).write_text("changed")
+        (self.root / "output.md").write_text("changed")
+        task = self.tasks.read()["tasks"]["T"]
+        seq.finish(self.tasks, task, run)
+        seq.finish(self.tasks, task, legacy)
+        self.assertNotIn(caches[1], collection["files_end"])
+        self.assertIn(caches[1], legacy["collection"]["files_end"])
+        self.assertIn(caches[1], {f["path"] for f in legacy["collection"]["changed_files"]})
+        self.assertEqual([f["path"] for f in collection["changed_files"]], ["output.md"])
+
     def test_named_command_timing_link_failure_and_unlinked(self):
         seq.save_settings(self.root, {"schema_version": 1, "commands": {"check": {
             "kind": "test", "argv": ["rtk", "proxy", sys.executable, "-c", "raise SystemExit(7)"]}}})
