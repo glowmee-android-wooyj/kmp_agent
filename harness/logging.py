@@ -97,6 +97,12 @@ def snapshot(root, *, prune_generated=False, prune_root_build_caches=False):
             if not path.is_symlink() and path.is_file()}
 
 
+def snapshot_for_policy(root, policy):
+    """Compare file observations using the policy pinned at the start."""
+    return snapshot(root, prune_generated=policy in {"generated_pruned_v1", "generated_pruned_v2"},
+                    prune_root_build_caches=policy == "generated_pruned_v2")
+
+
 def changes(before, after):
     return [{"path": p, "before_sha256": before.get(p), "after_sha256": after.get(p),
              "change": "added" if p not in before else "deleted" if p not in after else "modified"}
@@ -331,7 +337,8 @@ class Logger:
         proc = subprocess.run(["rtk", "proxy", "git", "rev-parse", "HEAD"],
                               cwd=self.root, capture_output=True, text=True)
         self.append("run_started", run_id, work_type,
-                    observed={"started_at": now(), "files": snapshot(self.root, prune_generated=True), "snapshot_policy":"generated_pruned_v1",
+                    observed={"started_at": now(), "files": snapshot_for_policy(self.root, "generated_pruned_v2"),
+                              "snapshot_policy": "generated_pruned_v2",
                               "git_commit": proc.stdout.strip() if proc.returncode == 0 else UNKNOWN,
                               "python": sys.version.split()[0], "platform": sys.platform,
                               "logger_sha256": digest(Path(__file__).read_bytes()),
@@ -354,7 +361,8 @@ class Logger:
             guard_finish(self.root,run_id,end_reason=end_reason)
         if any(e["run_id"] == run_id and e["event_type"] == "run_finished" for e in self.read()):
             raise ValueError("run already finished")
-        observed = {"changed_files": changes(start["observed"]["files"], snapshot(self.root, prune_generated=start["observed"].get("snapshot_policy") == "generated_pruned_v1")),
+        after = snapshot_for_policy(self.root, start["observed"].get("snapshot_policy"))
+        observed = {"changed_files": changes(start["observed"]["files"], after),
                     "tokens": UNKNOWN, "cost": UNKNOWN}
         if finish:
             observed["ended_at"] = now()

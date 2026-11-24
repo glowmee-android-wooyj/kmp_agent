@@ -90,6 +90,16 @@ class SequentialTests(unittest.TestCase):
         self.assertNotIn(caches[1], collection["files_start"])
         self.assertNotIn(caches[2], collection["files_start"])
 
+        outer_run = self.logger.start("HARNESS_BUILD", "orchestrator", "measure cache exclusion")
+        start = self.logger.run(outer_run)["observed"]
+        self.assertEqual(start["snapshot_policy"], "generated_pruned_v2")
+        self.assertNotIn(caches[1], start["files"])
+        self.assertIn(tracked, start["files"])
+        self.logger.append("run_started", "legacy", "HARNESS_BUILD", observed={
+            "snapshot_policy": "generated_pruned_v1",
+            "files": seq.log.snapshot(self.root, prune_generated=True),
+        })
+
         legacy = copy.deepcopy(run)
         legacy["collection"]["snapshot_policy"] = "generated_pruned_v1"
         legacy["collection"]["files_start"] = seq.log.snapshot(self.root, prune_generated=True)
@@ -102,6 +112,10 @@ class SequentialTests(unittest.TestCase):
         self.assertIn(caches[1], legacy["collection"]["files_end"])
         self.assertIn(caches[1], {f["path"] for f in legacy["collection"]["changed_files"]})
         self.assertEqual([f["path"] for f in collection["changed_files"]], ["output.md"])
+        outer = self.logger.checkpoint(outer_run, "finished", finish=True)
+        legacy_outer = self.logger.checkpoint("legacy", "finished", finish=True)
+        self.assertEqual([f["path"] for f in outer["observed"]["changed_files"]], ["output.md"])
+        self.assertIn(caches[1], {f["path"] for f in legacy_outer["observed"]["changed_files"]})
 
     def test_named_command_timing_link_failure_and_unlinked(self):
         seq.save_settings(self.root, {"schema_version": 1, "commands": {"check": {
