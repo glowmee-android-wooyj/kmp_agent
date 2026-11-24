@@ -69,9 +69,11 @@ def validate_result(value):
     return value
 
 
-def _ignored_source_entries(root, folder, names, protected):
+def _ignored_source_entries(root, folder, names, protected, *, copying=False):
     from harness.workspace_scan import generated_directory
-    private = {'.git','.harness','.kmp-agent','.codex','.agents','.worker-cache','__pycache__','qa-tools'}
+    private = {'.git','.harness','.kmp-agent','.codex','.agents','.worker-cache','__pycache__'}
+    if not copying:
+        private.add('qa-tools')
     return {
         name for name in names
         if name in private or (folder == root and name == 'verification')
@@ -346,7 +348,7 @@ class QA:
             from harness.workspace_scan import protected_git_paths
             protected = protected_git_paths(self.root)
             def ignore_snapshot(path,names):
-                return _ignored_source_entries(self.root, Path(path), names, protected)
+                return _ignored_source_entries(self.root, Path(path), names, protected, copying=True)
             shutil.copytree(self.root,workspace,ignore=ignore_snapshot,symlinks=True)
             before=manifest(workspace,generated)
             before_all=manifest(workspace) if generated else before
