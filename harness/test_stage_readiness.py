@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from harness.tasks import Tasks
 from harness.stage_readiness import STAGES,DOMAINS,assess,gate
 
@@ -89,6 +90,66 @@ class StageReadinessTest(unittest.TestCase):
         status=assess(self.root,self.t.read(),'F')['stages'][0]
         self.assertEqual(status['status'],'BLOCKED_RETRY_LIMIT');self.assertTrue(status['requires_human'])
         with self.assertRaisesRegex(ValueError,'한도'):self.t.begin(self.t.read()['stage_workflows']['F']['stages']['planning']['task_id'],'planning')
+
+    def test_legacy_one_attempt_stage_allows_one_correction(self):
+        self.approve('planning')
+        self.approve('design')
+        state = self.t.read()
+        state['tasks']['development_plan']['max_attempts'] = 1
+        self.t._save(state)
+        self.approve('development_plan', fail='development_plan-verification_commands')
+        state = self.t.read()
+        stage = state['stage_workflows']['F']['stages']['development_plan']
+        self.assertEqual(stage['task_history'], ['development_plan', 'development_plan.R1'])
+        self.assertEqual(state['tasks']['development_plan']['max_attempts'], 1)
+        self.assertEqual(state['tasks']['development_plan.R1']['state'], 'READY')
+        self.approve('development_plan', fail='development_plan-verification_commands')
+        status = assess(self.root, self.t.read(), 'F')['stages'][-1]
+        self.assertEqual((status['status'], status['attempts'], status['limit']),
+                         ('BLOCKED_RETRY_LIMIT', 2, 2))
+
+    def test_existing_dependent_can_start_after_revised_plan_passes(self):
+        self.approve('planning')
+        self.approve('design')
+        state = self.t.read()
+        state['tasks']['CODE']['dependencies'] = ['development_plan']
+        self.t._save(state)
+        self.approve('development_plan', fail='development_plan-verification_commands')
+        with self.assertRaises(ValueError):
+            self.t.ready('CODE')
+        self.assertEqual(self.approve('development_plan'), 'development_plan.R1')
+        self.t.bind_stage_inputs('CODE', ['req.md', 'planning.md', 'design.md', 'development_plan.md'],
+                                 'bind reviewed revision')
+        # The fixture has no authoritative product constraints; dependency validation runs first.
+        with self.assertRaisesRegex(ValueError, 'frozen authoritative development constraints'):
+            self.t.ready('CODE')
+        state = self.t.read()
+        self.assertEqual(state['tasks']['CODE']['dependencies'], ['development_plan'])
+
+    def test_approved_additional_correction_is_counted_once(self):
+        for _ in range(3):
+            self.approve('planning', fail='planning-acceptance')
+        stage = self.t.read()['stage_workflows']['F']['stages']['planning']
+        old = stage['task_id']
+        with patch('harness.approvals.human_approval', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'unused native'):
+                self.t.return_to_stage('F', 'planning', 'correct finding', 'req.md',
+                                       retry_approval_question_id='RETRY')
+        receipt = {'question_id': 'RETRY', 'task_ids': [old], 'decision_contract_sha256': 'contract'}
+        with patch('harness.approvals.human_approval', return_value=receipt) as approval:
+            result = self.t.return_to_stage('F', 'planning', 'correct finding', 'req.md',
+                                            retry_approval_question_id='RETRY')
+            self.assertEqual(result['status'], 'REPAIR_READY')
+            self.assertEqual(approval.call_args.args[4], 'stage_retry')
+            self.assertEqual(approval.call_args.args[5]['additional_attempts'], 1)
+        self.approve('planning', fail='planning-acceptance')
+        status = assess(self.root, self.t.read(), 'F')['stages'][0]
+        self.assertEqual((status['status'], status['attempts'], status['limit']),
+                         ('BLOCKED_RETRY_LIMIT', 4, 4))
+        with patch('harness.approvals.human_approval', return_value=receipt):
+            with self.assertRaisesRegex(ValueError, 'unused native'):
+                self.t.return_to_stage('F', 'planning', 'correct finding', 'req.md',
+                                       retry_approval_question_id='RETRY')
 
     def test_last_allowed_attempt_is_not_prematurely_reported_exhausted(self):
         state=self.t.read();state['tasks']['planning']['max_attempts']=1;self.t._save(state)

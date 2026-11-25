@@ -88,11 +88,19 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def snapshot(root, *, prune_generated=False):
+def snapshot(root, *, prune_generated=False, prune_root_build_caches=False):
     from harness.workspace_scan import paths
     root = Path(root)
+    options = {'prune_root_build_caches': True} if prune_root_build_caches else {}
     return {str(path.relative_to(root)): digest(path.read_bytes())
-            for path in paths(root, prune_generated=prune_generated) if not path.is_symlink() and path.is_file()}
+            for path in paths(root, prune_generated=prune_generated, **options)
+            if not path.is_symlink() and path.is_file()}
+
+
+def snapshot_for_policy(root, policy):
+    """Compare file observations using the policy pinned at the start."""
+    return snapshot(root, prune_generated=policy in {"generated_pruned_v1", "generated_pruned_v2"},
+                    prune_root_build_caches=policy == "generated_pruned_v2")
 
 
 def changes(before, after):
@@ -329,7 +337,8 @@ class Logger:
         proc = subprocess.run(["rtk", "proxy", "git", "rev-parse", "HEAD"],
                               cwd=self.root, capture_output=True, text=True)
         self.append("run_started", run_id, work_type,
-                    observed={"started_at": now(), "files": snapshot(self.root, prune_generated=True), "snapshot_policy":"generated_pruned_v1",
+                    observed={"started_at": now(), "files": snapshot_for_policy(self.root, "generated_pruned_v2"),
+                              "snapshot_policy": "generated_pruned_v2",
                               "git_commit": proc.stdout.strip() if proc.returncode == 0 else UNKNOWN,
                               "python": sys.version.split()[0], "platform": sys.platform,
                               "logger_sha256": digest(Path(__file__).read_bytes()),
@@ -339,8 +348,9 @@ class Logger:
                              "work_type_source": "agent_declared"})
         return run_id
 
-    def run(self, run_id):
-        found = [e for e in self.read() if e["run_id"] == run_id and e["event_type"] == "run_started"]
+    def run(self, run_id, *, records=None):
+        records = self.read() if records is None else records
+        found = [e for e in records if e["run_id"] == run_id and e["event_type"] == "run_started"]
         if not found:
             raise ValueError("unknown run_id")
         return found[0]
@@ -352,7 +362,8 @@ class Logger:
             guard_finish(self.root,run_id,end_reason=end_reason)
         if any(e["run_id"] == run_id and e["event_type"] == "run_finished" for e in self.read()):
             raise ValueError("run already finished")
-        observed = {"changed_files": changes(start["observed"]["files"], snapshot(self.root, prune_generated=start["observed"].get("snapshot_policy") == "generated_pruned_v1")),
+        after = snapshot_for_policy(self.root, start["observed"].get("snapshot_policy"))
+        observed = {"changed_files": changes(start["observed"]["files"], after),
                     "tokens": UNKNOWN, "cost": UNKNOWN}
         if finish:
             observed["ended_at"] = now()
@@ -379,8 +390,9 @@ class Logger:
             raise ValueError('strict managed commands require an explicit planned task')
         with stage('run_state'):
             from harness.command_runs import require_open
+            records = self.read()
             require_open(self.root, run_id, task=policy_state.get('tasks', {}).get(task_id),
-                         records=self.read())
+                         records=records)
         execution_run_id = run_id
         if task_id != UNKNOWN and agent_run_id != UNKNOWN and attempt_id != UNKNOWN:
             from harness.command_runs import execution_run
@@ -396,7 +408,8 @@ class Logger:
             with stage('dispatch'):
                 managed.require_dispatch(task_id)
         with stage('run_context'):
-            start = self.run(run_id)
+            start = self.run(run_id, records=records)
+        del records
         sys.path.insert(0, str(ROOT))
         from harness.sequential import command_context, named_command, KINDS
         with stage('command_context'):
@@ -415,7 +428,7 @@ class Logger:
         with stage('command_authorization'):
             authorize_command(self.root, policy_state, task_id, command, run_id=run_id)
         with stage('snapshot_before'):
-            before = snapshot(self.root, prune_generated=True)
+            before = snapshot(self.root, prune_generated=True, prune_root_build_caches=True)
         call_id = budget.call_id
         metadata = {**binding, "call_id": call_id, "command_kind": command_kind,
                     "command_name": command_name or UNKNOWN, "cwd": str(cwd.relative_to(self.root))}
@@ -473,10 +486,11 @@ class Logger:
         except (OSError, ValueError, KeyboardInterrupt) as error:
             self.append("command_finished", run_id, start["work_type"],
                         **context, observed={**metadata, "ended_at": now(), "elapsed_seconds": time.monotonic() - timer, "error_type": type(error).__name__,
-                                  "returncode": UNKNOWN, "changed_files": changes(before, snapshot(self.root, prune_generated=True))})
+                                  "returncode": UNKNOWN, "changed_files": changes(before, snapshot(
+                                      self.root, prune_generated=True, prune_root_build_caches=True))})
             raise
         with stage('snapshot_after'):
-            after = snapshot(self.root, prune_generated=True)
+            after = snapshot(self.root, prune_generated=True, prune_root_build_caches=True)
         with stage('code_fingerprint_after'):
             code_state = guarded_code_state()
         self.append("command_finished", run_id, start["work_type"],

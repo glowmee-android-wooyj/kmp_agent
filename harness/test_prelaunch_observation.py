@@ -63,12 +63,31 @@ class ObservationTests(unittest.TestCase):
         self.assertNotIn('scan_policy',legacy)
         new=workspace_basis(manager,task)
         self.assertNotIn('build/cache',new['files'])
-        self.assertEqual(new['scan_policy'],'generated_pruned_v1')
+        self.assertEqual(new['scan_policy'],'generated_pruned_v2')
         current,reason=_safe_basis(manager,{},task,{'recovery_start_basis':legacy})
         self.assertIsNotNone(current);self.assertIsNone(reason)
         cache.write_text('changed')
         current,reason=_safe_basis(manager,{},task,{'recovery_start_basis':legacy})
         self.assertIsNone(current);self.assertIn('workspace changed',reason)
+
+    def test_new_recovery_basis_prunes_only_ignored_root_build_caches(self):
+        from types import SimpleNamespace
+        from harness.recovery import workspace_basis
+
+        self.git('init', '-q')
+        (self.root / '.gitignore').write_text('/.gradle-local/\n/.konan-local/\n')
+        for name in ('.gradle-local', '.konan-local', '.xcode-derived'):
+            directory = self.root / name
+            directory.mkdir()
+            (directory / 'entry').write_text('data')
+        self.git('add', '-f', '.konan-local/entry')
+        manager = SimpleNamespace(root=self.root)
+        old = workspace_basis(manager, {}, reference={'scan_policy': 'generated_pruned_v1'})
+        new = workspace_basis(manager, {})
+        self.assertIn('.gradle-local/entry', old['files'])
+        self.assertNotIn('.gradle-local/entry', new['files'])
+        self.assertIn('.konan-local/entry', new['files'])
+        self.assertIn('.xcode-derived/entry', new['files'])
 
     def test_legacy_run_checkpoint_does_not_invent_generated_file_deletion(self):
         self.git('init','-q');(self.root/'.gitignore').write_text('build/\n')
@@ -78,6 +97,24 @@ class ObservationTests(unittest.TestCase):
                       observed={'files':logging.snapshot(self.root,prune_generated=False)})
         checkpoint=logger.checkpoint('legacy-run','Synthetic legacy continuity')
         self.assertFalse(checkpoint['observed']['changed_files'])
+
+    def test_qa_source_manifest_excludes_generated_cache_links_only(self):
+        from harness.qa import manifest, scoped_manifest
+
+        self.git('init', '-q')
+        (self.root / '.gitignore').write_text('/.konan-local/\n')
+        cache = self.root / '.konan-local'
+        cache.mkdir()
+        (cache / 'link').symlink_to('cache-target')
+        (self.root / 'source-link').symlink_to('source-target')
+        captured = manifest(self.root, prune_build_outputs=True)
+        self.assertNotIn('.konan-local/link', captured)
+        self.assertEqual(captured['source-link'], 'SYMLINK:source-target')
+        self.assertIn('.konan-local/link', manifest(self.root))
+        scope = {'mode': 'target_paths', 'paths': ['.konan-local']}
+        self.assertIn('.konan-local/link', scoped_manifest(self.root, scope))
+        scope['scan_policy'] = 'generated_pruned_v2'
+        self.assertNotIn('.konan-local/link', scoped_manifest(self.root, scope))
 
     def test_verification_ownership_remains_strict_inside_ignored_generated_paths(self):
         from types import SimpleNamespace

@@ -71,6 +71,52 @@ class SequentialTests(unittest.TestCase):
         self.assertTrue(report["baseline_id"]["value"].startswith("sha256:"))
         self.assertEqual(report["feature_version"]["value"], "feature-r1")
 
+    def test_role_snapshot_prunes_ignored_root_caches_and_preserves_v1(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".gitignore").write_text("/.gradle-local/\n/.konan-local/\n/.xcode-derived/\n")
+        caches = [".gradle-local/cache", ".konan-local/cache", ".xcode-derived/cache"]
+        for path in caches:
+            cache = self.root / path
+            cache.parent.mkdir()
+            cache.write_text("initial")
+        tracked = ".gradle-local/tracked-source"
+        (self.root / tracked).write_text("keep")
+        subprocess.run(["git", "-C", str(self.root), "add", "-f", tracked], check=True)
+        self.register()
+        run = self.start()
+        collection = run["collection"]
+        self.assertEqual(collection["snapshot_policy"], "generated_pruned_v2")
+        self.assertIn(caches[0], collection["files_start"])
+        self.assertNotIn(caches[1], collection["files_start"])
+        self.assertNotIn(caches[2], collection["files_start"])
+
+        outer_run = self.logger.start("HARNESS_BUILD", "orchestrator", "measure cache exclusion")
+        start = self.logger.run(outer_run)["observed"]
+        self.assertEqual(start["snapshot_policy"], "generated_pruned_v2")
+        self.assertNotIn(caches[1], start["files"])
+        self.assertIn(tracked, start["files"])
+        self.logger.append("run_started", "legacy", "HARNESS_BUILD", observed={
+            "snapshot_policy": "generated_pruned_v1",
+            "files": seq.log.snapshot(self.root, prune_generated=True),
+        })
+
+        legacy = copy.deepcopy(run)
+        legacy["collection"]["snapshot_policy"] = "generated_pruned_v1"
+        legacy["collection"]["files_start"] = seq.log.snapshot(self.root, prune_generated=True)
+        (self.root / caches[1]).write_text("changed")
+        (self.root / "output.md").write_text("changed")
+        task = self.tasks.read()["tasks"]["T"]
+        seq.finish(self.tasks, task, run)
+        seq.finish(self.tasks, task, legacy)
+        self.assertNotIn(caches[1], collection["files_end"])
+        self.assertIn(caches[1], legacy["collection"]["files_end"])
+        self.assertIn(caches[1], {f["path"] for f in legacy["collection"]["changed_files"]})
+        self.assertEqual([f["path"] for f in collection["changed_files"]], ["output.md"])
+        outer = self.logger.checkpoint(outer_run, "finished", finish=True)
+        legacy_outer = self.logger.checkpoint("legacy", "finished", finish=True)
+        self.assertEqual([f["path"] for f in outer["observed"]["changed_files"]], ["output.md"])
+        self.assertIn(caches[1], {f["path"] for f in legacy_outer["observed"]["changed_files"]})
+
     def test_named_command_timing_link_failure_and_unlinked(self):
         seq.save_settings(self.root, {"schema_version": 1, "commands": {"check": {
             "kind": "test", "argv": ["rtk", "proxy", sys.executable, "-c", "raise SystemExit(7)"]}}})
@@ -237,7 +283,22 @@ else:
             shim.write_text("import runpy,sys,subprocess\nfrom pathlib import Path\nfrom unittest.mock import patch\nsys.path.insert(0,%r)\nentry=sys.argv[1];sys.argv=sys.argv[1:]\npatch('harness.decisions.native_store',return_value=Path(%r)).start()\noriginal_call=subprocess.call\ndef invoke(argv,**kwargs):\n    if len(argv)>1 and argv[1]==%r:\n        return original_call([sys.executable,__file__,*argv[1:]],**kwargs)\n    return original_call(argv,**kwargs)\nsubprocess.call=invoke\nrunpy.run_path(entry,run_name='__main__')\n" % (str(runtime),str(native.parent),str(runtime/'harness/cli.py')))
             if preflight_retry:
                 text=shim.read_text()
-                text=text.replace("runpy.run_path(entry,run_name='__main__')", "from harness.execution_policy import WorkerGate\nimport time\noriginal_init=WorkerGate.__init__\ndef delayed_init(self,*args,**kwargs):\n    original_init(self,*args,**kwargs)\n    if Path(%r).exists(): time.sleep(60)\nWorkerGate.__init__=delayed_init\nrunpy.run_path(entry,run_name='__main__')" % str(root/'.harness/slow-preflight'))
+                injection = """from harness.command_preflight import current
+from harness.execution_policy import WorkerGate
+import time
+
+original_init = WorkerGate.__init__
+def expire_at_worker_gate(self, *args, **kwargs):
+    original_init(self, *args, **kwargs)
+    if Path(%r).exists():
+        budget = current()
+        assert budget is not None and budget.armed and budget.name == 'worker_gate'
+        budget.deadline = time.monotonic() - 1
+
+WorkerGate.__init__ = expire_at_worker_gate
+runpy.run_path(entry, run_name='__main__')
+""" % str(root/'.harness/slow-preflight')
+                text=text.replace("runpy.run_path(entry,run_name='__main__')", injection)
                 shim.write_text(text)
             def cli(action, expected_exit=0, payload=None, **options):
                 argv = ["rtk", "proxy", sys.executable, '-B',str(shim),str(root / ".kmp-agent/agent.py"), action]
@@ -439,16 +500,20 @@ else:
                 settings_path.write_bytes(settings_bytes)
             if preflight_retry:
                 flag=root/'.harness/slow-preflight';flag.write_text('Synthetic fault injection only')
-                import time
-                before_timeout=time.monotonic()
                 timed_out=cli('command',expected_exit=1,run_id=command_run_id,task_id='T',
-                    agent_run_id=run['agent_run_id'],attempt_id=run['attempt_id'],command_name='build',preflight_timeout=10)
+                    agent_run_id=run['agent_run_id'],attempt_id=run['attempt_id'],command_name='build')
                 self.assertEqual(timed_out['error_type'],'PreflightTimeout')
                 self.assertIn('worker_gate',timed_out['cause'])
                 self.assertIn('command-preflight',timed_out['recovery'])
-                self.assertLess(time.monotonic()-before_timeout,20)
                 self.assertFalse((root/'.harness/build.done').exists())
-                self.assertTrue(manager.read()['tasks']['T']['executions'][0]['command_prelaunch_aborts'])
+                execution=manager.read()['tasks']['T']['executions'][0]
+                diagnostics = [
+                    row for path in (root/'.harness/logs/command-preflight').glob('*.jsonl')
+                    for row in map(json.loads, path.read_text().splitlines())
+                    if row['state'] == 'CLEANUP_DEFERRED'
+                    or row['stage'] == 'abort_ownership_cleanup'
+                ]
+                self.assertTrue(execution.get('command_prelaunch_aborts'), diagnostics)
                 flag.unlink()
             command_run_ids = []
             for name in ('build','test'):

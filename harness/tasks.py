@@ -88,6 +88,10 @@ class Tasks:
             refresh_verification(self, state)
             from harness.decisions import refresh_waits
             refresh_waits(self, state)
+            if action == 'read':
+                self._save(state)
+                self._flush(state)
+                return state
             original = copy.deepcopy(state)
             try:
                 from harness.execution_policy import gate
@@ -112,12 +116,10 @@ class Tasks:
                 result = state['tasks'][task_id]['state']
             self._save(state)
             self._flush(state)
-            if action == 'read':
-                return copy.deepcopy(state)
             return result
 
     def read(self):
-        return self._mutate("read", lambda state: copy.deepcopy(state))
+        return self._mutate("read", None)
 
     def configure_execution_policy(self, root_session_path, root_session_id, **configuration):
         from harness.execution_policy import configure
@@ -158,8 +160,17 @@ class Tasks:
                     question['text_fallback_prompt'] = render_prompt(question)
         return questions
 
-    def require_dispatch(self, task_id, preflight=False):
-        return self._mutate('dispatch_preflight' if preflight else 'dispatch', lambda state: None, task_id)
+    def require_dispatch(self, task_id, preflight=False, *, active_execution=False):
+        def inspect(state):
+            if not active_execution:
+                return None
+            task = state['tasks'].get(task_id, {})
+            active = [run for run in task.get('executions', []) if not run.get('ended_at')]
+            if len(active) != 1 or task.get('state') not in {'IN_PROGRESS', 'IN_REVIEW'}:
+                raise ValueError('managed command requires active unblocked execution')
+            return active[0]['agent_run_id']
+
+        return self._mutate('dispatch_preflight' if preflight else 'dispatch', inspect, task_id)
 
     def configure_verification(self, task_id, **configuration):
         from harness.verification import configure
@@ -339,14 +350,14 @@ class Tasks:
                 raise ValueError('excluded Todo is not complete or executable; record an applicability decision first')
             if task.get('verification_required') and not task.get('verification_contract'):
                 raise ValueError('required verification contract missing before ready')
-            from harness.stage_readiness import gate as readiness_gate
+            from harness.stage_readiness import current_dependencies, gate as readiness_gate
             reason=readiness_gate(self,state,task)
             if reason:raise ValueError(reason)
             if task["state"] not in {"TODO", "BLOCKED"}:
                 raise ValueError("ready requires TODO or BLOCKED")
             if any(r["ended_at"] is None for r in task["executions"]):
                 raise ValueError("active checkpoint must be resumed or failed first")
-            if any(state["tasks"][d]["state"] != "DONE" for d in task["dependencies"]):
+            if any(state["tasks"][d]["state"] != "DONE" for d in current_dependencies(state, task)):
                 raise ValueError("unfinished dependency")
             if not all(self._valid_artifact(a) for a in task["inputs"]):
                 raise ValueError("invalid input snapshot")
@@ -897,9 +908,11 @@ class Tasks:
         from harness.stage_readiness import bind_inputs
         return bind_inputs(self,task_id,inputs,reason)
 
-    def return_to_stage(self,feature_id,stage,reason,evidence,source_task_id=None,source_review_id=None):
+    def return_to_stage(self,feature_id,stage,reason,evidence,source_task_id=None,source_review_id=None,
+                        retry_approval_question_id=None):
         from harness.stage_readiness import return_to_stage
-        return return_to_stage(self,feature_id,stage,reason,evidence,source_task_id,source_review_id)
+        return return_to_stage(self,feature_id,stage,reason,evidence,source_task_id,source_review_id,
+                               retry_approval_question_id)
 
     def route_issue(self, **data):
         from harness.findings import route

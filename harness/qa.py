@@ -69,15 +69,42 @@ def validate_result(value):
     return value
 
 
-def manifest(root,generated_paths=()):
+def _ignored_source_entries(root, folder, names, protected, *, copying=False):
+    from harness.workspace_scan import generated_directory
+    private = {'.git','.harness','.kmp-agent','.codex','.agents','.worker-cache','__pycache__'}
+    if not copying:
+        private.add('qa-tools')
+    return {
+        name for name in names
+        if name in private or (folder == root and name == 'verification')
+        or ((folder / name).is_dir() and not (folder / name).is_symlink()
+            and generated_directory((folder / name).relative_to(root), protected,
+                                    include_root_build_caches=True))
+    }
+
+
+def manifest(root, generated_paths=(), *, prune_build_outputs=False):
     """Content manifest, excluding private harness state/Git and QA-only scratch."""
-    root=Path(root);out={}
-    for p in root.rglob('*'):
-        rel=p.relative_to(root)
-        if rel.parts[0] == 'verification':continue
-        if set(rel.parts)&{'.git','.harness','.kmp-agent','.codex','.agents','.worker-cache','__pycache__','qa-tools'}:continue
-        if p.is_symlink():out[str(rel)]='SYMLINK:'+os.readlink(p)
-        elif p.is_file() and not any(rel.as_posix()==base or rel.as_posix().startswith(base+'/') for base in generated_paths):out[str(rel)]=hashlib.sha256(p.read_bytes()).hexdigest()
+    from harness.workspace_scan import protected_git_paths
+
+    root = Path(root)
+    protected = protected_git_paths(root) if prune_build_outputs else None
+    out = {}
+    def fail(error):
+        raise error
+    for directory, folders, files in os.walk(root, onerror=fail):
+        folder = Path(directory)
+        ignored = _ignored_source_entries(root, folder, folders + files, protected)
+        for name in folders + files:
+            if name in ignored:
+                continue
+            path = folder / name
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                out[relative] = 'SYMLINK:' + os.readlink(path)
+            elif path.is_file() and not any(relative == base or relative.startswith(base + '/') for base in generated_paths):
+                out[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        folders[:] = [name for name in folders if name not in ignored]
     return out
 
 
@@ -109,7 +136,10 @@ def target_scope(target,original_requests):
 
 
 def scoped_manifest(root,scope,generated_paths=()):
-    content=manifest(root,generated_paths)
+    policy = scope.get('scan_policy')
+    if policy not in {None, 'generated_pruned_v2'}:
+        raise ValueError('unknown QA source scan policy')
+    content=manifest(root,generated_paths,prune_build_outputs=policy is not None)
     if scope.get('mode')!='target_paths':return content
     paths=scope['paths']
     return {p:sha for p,sha in content.items() if any(p==base or p.startswith(base+'/') for base in paths)}
@@ -201,6 +231,7 @@ class QA:
         if stage=='requirements':
             if not lineage_path.exists():raise ValueError('requirements QA requires typed lineage')
             scope={'mode':'target_paths','paths':list(dict.fromkeys(['requirement-lineage.json']+[s['path'] for s in lineage['sources']])),'basis':'source and derivation scope; implementation changes do not invalidate source alignment'}
+        scope['scan_policy'] = 'generated_pruned_v2'
         config={'generated_paths':generated,'repair_criteria':copy.deepcopy(links),'repair_criteria_definitions':{c['id']:copy.deepcopy(c) for c in state['tasks'].get(repair_task_id,{}).get('criteria',[]) if c['id'] in links},'context_artifacts':context_refs,'images':image_refs,'manifest_scope':scope,'stage':stage,'executable':executable,'timeout':timeout,'target_task_id':target_task_id,'original_requests':refs,'commands':commands,'repair_task_id':repair_task_id,'target_manifest':scoped_manifest(self.root,scope,generated),'target_baseline':copy.deepcopy(target.get('development_tracking',{}).get('baselines',target.get('inputs',[]))),'attempts':[]}
         def op(s):
             t=s['tasks'][task_id];t['qa_config']=config
@@ -283,7 +314,7 @@ class QA:
             raise ValueError('installed QA requires native adapters, not injected workers')
         configured_adapter(self.tasks,self.tasks.read()['tasks'][config['target_task_id']],config['commands'],executable)
         if any(r.get('ended_at') is None for r in task['executions']):raise ValueError('QA already has an active execution')
-        if any(str(v).startswith('SYMLINK:') for v in manifest(self.root).values()):raise ValueError('QA isolation refuses product symlinks')
+        if any(str(v).startswith('SYMLINK:') for v in manifest(self.root,prune_build_outputs=True).values()):raise ValueError('QA isolation refuses product symlinks')
         if task['state']=='DONE':raise ValueError('QA already completed; configure a new retest task')
         if scoped_manifest(self.root,config.get('manifest_scope',{'mode':'UNKNOWN'}),config.get('generated_paths',[]))!=config['target_manifest']:raise ValueError('target changed since QA configuration; configure a new retest task')
         generated=self._generated(config,task)
@@ -318,14 +349,15 @@ class QA:
             run=self.tasks.begin(task_id,'verification',actor_id='qa-producer:'+reserved_id,agent_run_id=reserved_id,execution_mode='independent_process' if worker is None else 'local_check')
             aid=run['agent_run_id'];context.update(agent_run_id=aid,owned_runs=[aid],phase='prepare_workspace');base=verification_directory(self.root,'qa',task_id,aid);workspace=base/'workspace'
             source_before=scoped_manifest(self.root,config.get('manifest_scope',{'mode':'UNKNOWN'}),config.get('generated_paths',[]))
-            private=shutil.ignore_patterns('.git','.harness','.kmp-agent','.codex','.agents','__pycache__','.worker-cache')
+            from harness.workspace_scan import protected_git_paths
+            protected = protected_git_paths(self.root)
             def ignore_snapshot(path,names):
-                ignored=private(path,names)
-                if Path(path)==self.root:ignored.add('verification')
-                return ignored
-            shutil.copytree(self.root,workspace,ignore=ignore_snapshot)
+                return _ignored_source_entries(self.root, Path(path), names, protected, copying=True)
+            shutil.copytree(self.root,workspace,ignore=ignore_snapshot,symlinks=True)
             before=manifest(workspace,generated)
             before_all=manifest(workspace) if generated else before
+            if any(str(value).startswith('SYMLINK:') for value in before_all.values()):
+                raise ValueError('QA isolation refuses product symlinks')
             current_state=self.tasks.read();current_target=current_state['tasks'][config['target_task_id']]
             previous_issues=[copy.deepcopy(i) for i in current_state.get('issues',[]) if i.get('task_id')==config['target_task_id']]
             packet={'previous_findings':previous_issues,'previous_qa_attempts':copy.deepcopy(config.get('attempts',[])),'current_target':{'task_id':current_target['task_id'],'inputs':current_target['inputs'],'outputs':current_target['outputs'],'state':current_target['state'],'development_tracking':current_target.get('development_tracking',{})},'qa_stage':config['stage'],'qa_task_id':task_id,'target_task_id':config['target_task_id'],'criteria':task['criteria'],'original_requests':config['original_requests'],'inputs':task['inputs'],'baseline':config['target_baseline'],'code_manifest':before,'source_manifest_scope':config.get('manifest_scope',{'mode':'UNKNOWN'}),'source_target_manifest':source_before,'authorized_generated_paths':generated,'commands':config['commands'],'instructions':'Inspect original requests and frozen inputs. Do not modify product files. Write evidence only under qa-tools/. Findings must distinguish baseline errors, implementation violations, usability, suggestions. No approval from self-report alone. Return the exact supplied QA result schema.','result_schema':RESULT_SCHEMA}
@@ -505,7 +537,9 @@ class QA:
             def rebase(s):
                 t=s['tasks'][task_id];before_inputs=copy.deepcopy(t['inputs']);t['inputs']=refs
                 t.setdefault('input_rebases',[]).append({'before':before_inputs,'after':copy.deepcopy(refs),'reason':'owner repair followed by fresh QA retest','repair_evidence':proof})
-                scope=target_scope(target,t['qa_config']['original_requests']);t['qa_config']['manifest_scope']=scope;t['qa_config']['target_manifest']=scoped_manifest(self.root,scope,generated);t['qa_config']['target_baseline']=target_baseline
+                scope=target_scope(target,t['qa_config']['original_requests'])
+                scope['scan_policy'] = 'generated_pruned_v2'
+                t['qa_config']['manifest_scope']=scope;t['qa_config']['target_manifest']=scoped_manifest(self.root,scope,generated);t['qa_config']['target_baseline']=target_baseline
                 t['qa_config']['attempts'][-1]['repair']={'status':'REPORTED_COMPLETE_NOT_VERIFIED','evidence':proof}
                 t['qa_config'].setdefault('retest_bases',[]).append({'manifest':scoped_manifest(self.root,scope,generated),'manifest_scope':scope,'inputs':copy.deepcopy(refs),'baseline':target_baseline,'repair':proof})
                 self.tasks._event(s,'qa_retest_inputs_rebased',t,observed={'before':before_inputs,'after':refs,'repair':proof})

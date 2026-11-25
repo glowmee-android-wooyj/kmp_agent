@@ -32,18 +32,20 @@ def _record(root, run):
 
 def workspace_basis(manager, task, reference=None):
     from harness import logging
-    policy = (reference or {}).get('scan_policy') if reference is not None else 'generated_pruned_v1'
-    if policy not in {None, 'generated_pruned_v1'}:
+    policy = (reference or {}).get('scan_policy') if reference is not None else 'generated_pruned_v2'
+    if policy not in {None, 'generated_pruned_v1', 'generated_pruned_v2'}:
         raise ValueError('unknown recovery scan policy')
-    prune_generated = policy == 'generated_pruned_v1'
-    files = logging.snapshot(manager.root, prune_generated=prune_generated)
+    prune_generated = policy is not None
+    scan_options = dict(prune_generated=prune_generated,
+                        prune_root_build_caches=policy == 'generated_pruned_v2')
+    files = logging.snapshot(manager.root, **scan_options)
     modes = {p:(manager.root/p).stat().st_mode & 0o777 for p in files}
     # Logging snapshots intentionally omit links. Recovery must also pin their
     # names and raw targets, including dangling and directory links, without
     # following them outside the workspace. Keep the same generated exclusions.
     links = {}
     from harness.workspace_scan import paths
-    for path in paths(manager.root, prune_generated=prune_generated):
+    for path in paths(manager.root, **scan_options):
         if path.is_symlink():
             links[str(path.relative_to(manager.root))] = os.readlink(path)
     result = {'files':files, 'modes':modes, 'symlinks':links}
@@ -185,14 +187,7 @@ def owned_command(function):
         from harness.process_ownership import TaskLease, current_lease
         from harness.command_preflight import stage, PreflightTimeout
         with stage('ownership_dispatch'):
-            manager.require_dispatch(task_id)
-        with stage('ownership_state'):
-            state=manager.read()
-            task=state['tasks'].get(task_id, {})
-            active=[r for r in task.get('executions', []) if not r.get('ended_at')]
-            if len(active)!=1 or task.get('state') not in {'IN_PROGRESS','IN_REVIEW'}:
-                raise ValueError('managed command requires active unblocked execution')
-            aid=active[0]['agent_run_id']
+            aid = manager.require_dispatch(task_id, active_execution=True)
         if current_lease(manager.root,task_id):
             with stage('ownership_claim'):
                 claim(manager,task_id,aid)

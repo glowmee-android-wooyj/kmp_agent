@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("harness_tasks", Path(__file__).with_name("tasks.py"))
 module = importlib.util.module_from_spec(spec)
@@ -91,6 +92,16 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(report["TASK-002"]["executions"][0]["model_usage"]["input_tokens"], "UNKNOWN")
         self.assertEqual(self.tasks.report()["features"]["FEAT-001"]["known_subtotal"]["total_tokens"], 12)
         self.assertEqual(report["TASK-001"]["usage_summary"]["full_task_usage"], "UNKNOWN")
+
+    def test_read_refreshes_pending_questions_once(self):
+        from harness.decisions import refresh_waits
+
+        self.register()
+        with patch('harness.decisions.refresh_waits', wraps=refresh_waits) as refresh:
+            state = self.tasks.read()
+        refresh.assert_called_once()
+        state['tasks']['TASK-001']['title'] = 'caller mutation'
+        self.assertEqual(self.tasks.read()['tasks']['TASK-001']['title'], 'synthetic')
 
     def test_outbox_recovery_and_frozen_input(self):
         self.register()

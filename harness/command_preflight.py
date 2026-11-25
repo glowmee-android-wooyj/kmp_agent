@@ -73,6 +73,9 @@ class Preflight:
         os.write(2, b'kmp-agent preflight '+line)
 
     def _expired(self, signum, frame):
+        # A synchronous deadline check can win the race with SIGALRM. Release
+        # this budget's timer before the caller opens its cleanup budget.
+        self.stop_checks()
         raise PreflightTimeout('command preflight timed out after %.3fs at %s; '
             'no test success is implied; inspect .harness/logs/command-preflight/%s.jsonl '
             'and task ownership before retry' % (self.timeout, self.name, self.call_id))

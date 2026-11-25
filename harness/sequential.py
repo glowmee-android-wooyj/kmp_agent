@@ -147,9 +147,11 @@ def begin(manager, task, run):
     bundle = {"inputs": run["inputs"], "baseline": run.get("baseline"), "stage_contract": task.get("stage_contract")}
     collection["input_bundle_id"] = "sha256:" + log.digest(json.dumps(bundle, sort_keys=True).encode())
     collection["harness"] = copy.deepcopy(manager.logger.harness)
-    collection["files_start"] = copy.deepcopy(run["code_state_start"]["files"]) if run.get("code_state_start") else log.snapshot(manager.root, prune_generated=True)
-    if not run.get("code_state_start"):
-        collection["snapshot_policy"] = "generated_pruned_v1"
+    if run.get("code_state_start"):
+        collection["files_start"] = copy.deepcopy(run["code_state_start"]["files"])
+    else:
+        collection["snapshot_policy"] = "generated_pruned_v2"
+        collection["files_start"] = log.snapshot_for_policy(manager.root, collection["snapshot_policy"])
     collection["file_scope"] = "development_code_state" if run.get("code_state_start") else "logger_snapshot_exclusions"
     collection["module_map"] = copy.deepcopy(config.get("modules", {})) if config is not None else UNKNOWN
     run["collection"] = collection
@@ -170,7 +172,7 @@ def finish(manager, task, run):
                         observed_modules=UNKNOWN, collection_error=type(error).__name__)
             return
     if after is None:
-        after = log.snapshot(manager.root, prune_generated=data.get("snapshot_policy") == "generated_pruned_v1")
+        after = log.snapshot_for_policy(manager.root, data.get("snapshot_policy"))
     data.update(files_end=after, changed_files=log.changes(data["files_start"], after),
                 modification_actor=UNKNOWN, attribution_basis="boundary observation; not exclusive ownership")
     mapping = data["module_map"]

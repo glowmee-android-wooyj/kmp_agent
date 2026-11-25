@@ -212,7 +212,8 @@ def gate(manager, state, task_id, action):
         active = [r for r in task['executions'] if not r.get('ended_at')]
         if len(active) != 1 or active[0].get('run_id') != manager.run_id or task['state'] != ('IN_REVIEW' if active[0].get('kind') == 'review' else 'IN_PROGRESS'):
             raise ValueError('managed dispatch requires one active unblocked execution in the current run')
-        if any(state['tasks'][d]['state'] != 'DONE' for d in task.get('dependencies', [])):
+        from harness.stage_readiness import current_dependencies
+        if any(state['tasks'][d]['state'] != 'DONE' for d in current_dependencies(state, task)):
             raise ValueError('unfinished dependency prevents managed dispatch')
         if not all(manager._valid_artifact(a) for a in task.get('inputs', [])):
             raise ValueError('invalid input snapshot prevents managed dispatch')
@@ -225,13 +226,24 @@ class WorkerGate:
         self.signature, self.state = None, None
 
     def check(self):
-        stat = self.manager.path.stat()
-        signature = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
-        if signature != self.signature:
-            self.state = json.loads(self.manager.path.read_text())
-            self.signature = signature
-        if pending(self.state, self.task_id):
-            raise ValueError('required human answer pending; managed worker interrupted')
+        from harness.decisions import ApprovalCaptureError, report_capture_errors
+        with report_capture_errors():
+            for attempt in range(3):
+                stat = self.manager.path.stat()
+                signature = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+                if signature != self.signature:
+                    self.state = json.loads(self.manager.path.read_text())
+                    self.signature = signature
+                try:
+                    questions = pending(self.state, self.task_id)
+                except ApprovalCaptureError as error:
+                    if attempt == 2:
+                        raise ValueError(f'approval workspace inspection failed; managed worker interrupted: {error}') from error
+                    time.sleep(.05)
+                else:
+                    if questions:
+                        raise ValueError('required human answer pending; managed worker interrupted: ' + ', '.join(questions))
+                    return
 
 
 def status(state, task, run_id=None):
