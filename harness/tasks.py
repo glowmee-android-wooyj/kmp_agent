@@ -88,6 +88,10 @@ class Tasks:
             refresh_verification(self, state)
             from harness.decisions import refresh_waits
             refresh_waits(self, state)
+            if action == 'read':
+                self._save(state)
+                self._flush(state)
+                return state
             original = copy.deepcopy(state)
             try:
                 from harness.execution_policy import gate
@@ -112,12 +116,10 @@ class Tasks:
                 result = state['tasks'][task_id]['state']
             self._save(state)
             self._flush(state)
-            if action == 'read':
-                return copy.deepcopy(state)
             return result
 
     def read(self):
-        return self._mutate("read", lambda state: copy.deepcopy(state))
+        return self._mutate("read", None)
 
     def configure_execution_policy(self, root_session_path, root_session_id, **configuration):
         from harness.execution_policy import configure
@@ -158,8 +160,17 @@ class Tasks:
                     question['text_fallback_prompt'] = render_prompt(question)
         return questions
 
-    def require_dispatch(self, task_id, preflight=False):
-        return self._mutate('dispatch_preflight' if preflight else 'dispatch', lambda state: None, task_id)
+    def require_dispatch(self, task_id, preflight=False, *, active_execution=False):
+        def inspect(state):
+            if not active_execution:
+                return None
+            task = state['tasks'].get(task_id, {})
+            active = [run for run in task.get('executions', []) if not run.get('ended_at')]
+            if len(active) != 1 or task.get('state') not in {'IN_PROGRESS', 'IN_REVIEW'}:
+                raise ValueError('managed command requires active unblocked execution')
+            return active[0]['agent_run_id']
+
+        return self._mutate('dispatch_preflight' if preflight else 'dispatch', inspect, task_id)
 
     def configure_verification(self, task_id, **configuration):
         from harness.verification import configure

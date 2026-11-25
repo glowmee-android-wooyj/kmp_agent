@@ -187,14 +187,7 @@ def owned_command(function):
         from harness.process_ownership import TaskLease, current_lease
         from harness.command_preflight import stage, PreflightTimeout
         with stage('ownership_dispatch'):
-            manager.require_dispatch(task_id)
-        with stage('ownership_state'):
-            state=manager.read()
-            task=state['tasks'].get(task_id, {})
-            active=[r for r in task.get('executions', []) if not r.get('ended_at')]
-            if len(active)!=1 or task.get('state') not in {'IN_PROGRESS','IN_REVIEW'}:
-                raise ValueError('managed command requires active unblocked execution')
-            aid=active[0]['agent_run_id']
+            aid = manager.require_dispatch(task_id, active_execution=True)
         if current_lease(manager.root,task_id):
             with stage('ownership_claim'):
                 claim(manager,task_id,aid)

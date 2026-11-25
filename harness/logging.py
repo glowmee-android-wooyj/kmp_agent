@@ -348,8 +348,9 @@ class Logger:
                              "work_type_source": "agent_declared"})
         return run_id
 
-    def run(self, run_id):
-        found = [e for e in self.read() if e["run_id"] == run_id and e["event_type"] == "run_started"]
+    def run(self, run_id, *, records=None):
+        records = self.read() if records is None else records
+        found = [e for e in records if e["run_id"] == run_id and e["event_type"] == "run_started"]
         if not found:
             raise ValueError("unknown run_id")
         return found[0]
@@ -389,8 +390,9 @@ class Logger:
             raise ValueError('strict managed commands require an explicit planned task')
         with stage('run_state'):
             from harness.command_runs import require_open
+            records = self.read()
             require_open(self.root, run_id, task=policy_state.get('tasks', {}).get(task_id),
-                         records=self.read())
+                         records=records)
         execution_run_id = run_id
         if task_id != UNKNOWN and agent_run_id != UNKNOWN and attempt_id != UNKNOWN:
             from harness.command_runs import execution_run
@@ -406,7 +408,8 @@ class Logger:
             with stage('dispatch'):
                 managed.require_dispatch(task_id)
         with stage('run_context'):
-            start = self.run(run_id)
+            start = self.run(run_id, records=records)
+        del records
         sys.path.insert(0, str(ROOT))
         from harness.sequential import command_context, named_command, KINDS
         with stage('command_context'):
