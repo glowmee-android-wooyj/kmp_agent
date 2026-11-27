@@ -36,7 +36,7 @@ rtk proxy python3 .kmp-agent/agent.py task --run-id ORIGINAL_RUN --operation con
 
 작업 시작 때 명령 로그가 생성되지 않아 `unknown run_id`가 발생한 경우, 같은 명령의 `previous_run_id`에 원래 작업 run을 지정한다. 현재 시도·native root·동결 범위가 유효하고 해당 run에 시작·종료 기록이 없고 현재 시도에 명령 기록이 없을 때만 새 명령 로그를 연결한다. 누락된 과거 기록은 생성하지 않는다.
 
-최초 `previous_run_id`는 종료된 원래 상위 run이며 이후 연결이 다시 종료되면 가장 최근 명령 로그 run을 명시한다. 반환된 `command_run_id`는 후속 `command --run-id`에만 사용하고, 작업 lifecycle·승인·계획·사용량의 기존 실행 ID를 새 로그 ID로 바꾸지 않는다. 작업의 `run_id`·원래 native root·동결 계약·시도 예산은 유지된다. 이미 열린 동일 연결의 재호출은 같은 결과를 반환하며 중복 로거를 만들지 않는다.
+최초 `previous_run_id`는 종료됐거나 명령 로그가 누락된 원래 상위 run이며 이후 연결이 다시 종료되면 가장 최근 명령 로그 run을 명시한다. 반환된 `command_run_id`는 후속 `command --run-id`에만 사용하고, 작업 lifecycle·승인·계획·사용량의 기존 실행 ID를 새 로그 ID로 바꾸지 않는다. 작업의 `run_id`·원래 native root·동결 계약·시도 예산은 유지된다. 이미 열린 동일 연결의 재호출은 같은 결과를 반환하며 중복 로거를 만들지 않는다.
 
 연결은 기존 작업이 `IN_PROGRESS`이고 work 시도가 열려 있으며, 현재 승인·입력·범위·계획·기술 계약·native root와 실행 소유권 검사를 통과한 경우에만 가능하다. 변경된 원본/범위·다른 root·시도 불일치·동시 executor·불확실한 자식 프로세스는 거부한다. 종료된 원래 run에 직접 명령을 넣거나 무관한 `start` run을 사용하는 경로는 계속 거부한다. 새 명령 run은 제품 완료 권한이 아니며 중단 종료는 `finish --end-reason handoff` 또는 `paused` 등으로 구분한다.
 
@@ -44,6 +44,12 @@ rtk proxy python3 .kmp-agent/agent.py task --run-id ORIGINAL_RUN --operation con
 
 
 전체 실행 계획은 메인이 만들고, 위임받은 작업의 상세 계획은 담당자가 만든다. 계획에는 무엇을 바꾸는지뿐 아니라 완료 조건, 입력, 출력, 확인 방법을 포함한다. 서브에이전트를 호출한 사실이나 제목만 있는 작업 목록은 상세 계획을 대신하지 않는다.
+
+### 실행 중인 서비스와 함께 검증
+
+관리 `command`에서 서비스 실행 argv와 `--data`로 검증을 지정한다. 예를 들어 JSON 파일에는 `{"startup_seconds": 15, "commands": [["rtk", "proxy", "curl", "--fail", "http://127.0.0.1:8080/health"]]}`를 담는다. 서비스·검증 명령은 모두 기존 명령 승인에 포함돼야 한다.
+
+같은 작업의 실행 잠금 안에서 서비스를 시작한 뒤 검증 명령을 순서대로 실행한다. 검증은 기존 명령 권한과 추적을 그대로 거친다. 오류 또는 종료 시 소유한 서비스 프로세스를 정리한다. 서비스 기동 대기 시간은 서비스 준비를 증명하지 않으므로 승인된 상태 확인 명령을 첫 검증으로 지정한다.
 
 ## 계획을 만드는 순서
 

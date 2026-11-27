@@ -114,6 +114,41 @@ class CommandRunContinuationTests(unittest.TestCase):
         self.assertTrue((self.root/'.harness/build.txt').exists())
         self.assertTrue((self.root/'.harness/test.txt').exists())
 
+    def test_service_and_integration_command_share_one_managed_lease(self):
+        service = ['rtk', 'proxy', sys.executable, '-c',
+                   'from pathlib import Path; import os,time; '
+                   'Path(".harness/service.pid").write_text(str(os.getpid())); time.sleep(60)']
+        probe = ['rtk', 'proxy', sys.executable, '-c',
+                 'from pathlib import Path; import os; '
+                 'pid=int(Path(".harness/service.pid").read_text()); os.kill(pid,0); '
+                 'Path(".harness/probe.txt").write_text("verified")']
+        result = self.logger.command(self.parent, service, 'T', self.run['agent_run_id'],
+                                     self.run['attempt_id'], 'integration',
+                                     verification={'startup_seconds': 1, 'commands': [probe]})
+        self.assertEqual(result, 0)
+        self.assertEqual((self.root/'.harness/probe.txt').read_text(), 'verified')
+        pid = int((self.root/'.harness/service.pid').read_text())
+        from harness.process_ownership import owner_identity
+        self.assertEqual(owner_identity(pid)['status'], 'DEAD')
+        commands = [e for e in self.logger.read() if e['event_type'] == 'command_finished']
+        self.assertEqual([e['observed']['returncode'] for e in commands], [0, 0])
+
+    def test_failed_service_probe_stops_service_and_skips_later_commands(self):
+        service = ['rtk', 'proxy', sys.executable, '-c',
+                   'from pathlib import Path; import os,time; '
+                   'Path(".harness/service.pid").write_text(str(os.getpid())); time.sleep(60)']
+        fail_probe = ['rtk', 'proxy', sys.executable, '-c', 'raise SystemExit(9)']
+        later = ['rtk', 'proxy', sys.executable, '-c',
+                 'from pathlib import Path; Path(".harness/late").touch()']
+        result = self.logger.command(self.parent, service, 'T', self.run['agent_run_id'],
+                                     self.run['attempt_id'], 'integration', verification={
+                                         'startup_seconds': 1, 'commands': [fail_probe, later]})
+        self.assertEqual(result, 9)
+        self.assertFalse((self.root/'.harness/late').exists())
+        pid = int((self.root/'.harness/service.pid').read_text())
+        from harness.process_ownership import owner_identity
+        self.assertEqual(owner_identity(pid)['status'], 'DEAD')
+
     def test_open_parent_cannot_be_replaced_and_failed_attempt_cannot_continue(self):
         with self.assertRaises(ValueError): self.continuation()
         self.stop_and_resume()
