@@ -36,7 +36,7 @@
 rtk proxy python3 .kmp-agent/agent.py task --run-id ORIGINAL_RUN --operation continue-command-run --data docs/guard-inputs/command-continuation.json
 ```
 
-작업 시작 때 명령 로그가 생성되지 않아 `unknown run_id`가 발생한 경우, 같은 명령의 `previous_run_id`에 원래 작업 run을 지정한다. 현재 시도·native root·동결 범위가 유효하고 해당 run에 시작·종료 기록이 없고 현재 시도에 명령 기록이 없을 때만 새 명령 로그를 연결한다. 누락된 과거 기록은 생성하지 않는다.
+작업 시작 때 명령 로그가 생성되지 않아 `unknown run_id`가 발생한 경우, 같은 명령의 `previous_run_id`에 원래 작업 run을 지정한다. 현재 시도·native root·동결 범위가 유효하고 해당 run에 시작·종료 기록이 없고 현재 시도에 명령 기록이 없을 때만 새 명령 로그를 연결한다. 누락된 과거 기록은 생성하지 않는다. 누락 여부는 연결 기록이 추가되기 전까지의 로그를 기준으로 검증한다. 원래 로그가 뒤늦게 들어와도 이미 연결된 명령의 실행 근거는 유지한다.
 
 최초 `previous_run_id`는 종료됐거나 명령 로그가 누락된 원래 상위 run이며 이후 연결이 다시 종료되면 가장 최근 명령 로그 run을 명시한다. 반환된 `command_run_id`는 후속 `command --run-id`에만 사용하고, 작업 lifecycle·승인·계획·사용량의 기존 실행 ID를 새 로그 ID로 바꾸지 않는다. 작업의 `run_id`·원래 native root·동결 계약·시도 예산은 유지된다. 이미 열린 동일 연결의 재호출은 같은 결과를 반환하며 중복 로거를 만들지 않는다.
 

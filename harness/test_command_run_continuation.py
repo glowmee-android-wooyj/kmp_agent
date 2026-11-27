@@ -276,6 +276,27 @@ class MissingCommandRunTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unknown run_id'):
             self.logger.run(self.parent)
 
+    def test_late_predecessor_log_preserves_recovered_command_evidence(self):
+        from harness.command_runs import linked
+        from harness.sequential import report
+
+        link = self.continuation()
+        command_run = link['command_run_id']
+        self.assertEqual(self.command(command_run), 0)
+        self.logger.append('run_started', self.parent, 'HARNESS_IMPROVEMENT')
+        with self.assertRaisesRegex(ValueError, 'explicitly link'):
+            self.command(self.parent)
+        self.logger.append('run_finished', self.parent, 'HARNESS_IMPROVEMENT')
+
+        state = self.m.read()
+        task = state['tasks']['T']
+        execution, = task['executions']
+        self.assertTrue(linked(self.root, state, task, execution, command_run, historical=True))
+        command, = [row for row in report(self.root)["commands"] if row["run_id"] == command_run]
+        self.assertEqual(command["link"]["status"], "COLLECTED")
+        self.assertEqual(self.continuation(), link)
+        self.assertEqual(self.command(command_run), 0)
+
     def test_partial_predecessor_log_is_not_replaced(self):
         self.logger.append('run_finished', self.parent, 'HARNESS_IMPROVEMENT')
         with self.assertRaisesRegex(ValueError, 'unknown run_id'):

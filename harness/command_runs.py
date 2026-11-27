@@ -58,9 +58,9 @@ def _missing_initial_log(records, previous, execution, task_id):
 
 def linked(root, state, task, execution, command_run_id, *, historical=False, records=None, include_previous=False):
     """A new log run grants command logging only, never task lifecycle ownership."""
-    if command_run_id == execution['run_id']:
-        return True
     links = execution.get('command_run_continuations', [])
+    if command_run_id == execution['run_id']:
+        return historical or include_previous or not links
     if not isinstance(links, list) or not links:
         return False
     candidates = links if historical or include_previous else links[-1:]
@@ -73,7 +73,8 @@ def linked(root, state, task, execution, command_run_id, *, historical=False, re
                 or link.get('agent_run_id') != execution['agent_run_id']
                 or link.get('attempt_id') != execution.get('attempt_id')):
             continue
-        proof = next((e for e in records if e.get('event_id') == link.get('event_id')), None)
+        proof_index = next((i for i, e in enumerate(records) if e.get('event_id') == link.get('event_id')), None)
+        proof = records[proof_index] if proof_index is not None else None
         closed = next((e for e in records if e.get('event_id') == link.get('previous_finished_event_id')), None)
         if (not proof or proof.get('event_type') != 'command_run_continued'
                 or proof.get('run_id') != command_run_id
@@ -84,7 +85,7 @@ def linked(root, state, task, execution, command_run_id, *, historical=False, re
         previous = link.get('previous_run_id')
         if link.get('previous_log_missing') is True:
             if (link is not links[0] or link.get('previous_finished_event_id') is not None
-                    or not _missing_initial_log(records, previous, execution, task['task_id'])):
+                    or not _missing_initial_log(records[:proof_index], previous, execution, task['task_id'])):
                 continue
         elif (not closed or closed.get('event_type') != 'run_finished'
               or closed.get('run_id') != previous):
