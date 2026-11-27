@@ -359,6 +359,16 @@ def managed_command(manager, task_id, argv, cwd, timeout=None, text=True,
                 return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             except subprocess.TimeoutExpired:
                 continue
+            except KeyboardInterrupt:
+                # A foreground cancellation with a reaped child is an observed
+                # nonzero command result. Earlier launch/registration interrupts
+                # still require explicit recovery.
+                stdout, stderr = stop_owned_group(
+                    child, lambda owned, timeout: owned.communicate(timeout=timeout))
+                if not child.returncode:
+                    raise
+                watch.check()
+                return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
     except BaseException:
         if child is not None:
             stop_owned_group(child, lambda owned, timeout: owned.communicate(timeout=timeout))
