@@ -25,6 +25,8 @@ class CommandRunContinuationTests(unittest.TestCase):
     write_native = Native.write_native
     write_code = Authority.write_code
 
+    parent_has_log = True
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
@@ -42,7 +44,8 @@ class CommandRunContinuationTests(unittest.TestCase):
         self.git('-c','user.name=Synthetic','-c','user.email=synthetic@example.invalid',
                  'commit','-qm','Synthetic source basis')
         self.logger = Logger(self.root)
-        self.parent = self.logger.start('HARNESS_IMPROVEMENT', 'improvement', 'Synthetic lifecycle')
+        self.parent = (self.logger.start('HARNESS_IMPROVEMENT', 'improvement', 'Synthetic lifecycle')
+                       if self.parent_has_log else 'synthetic-plan-run')
         self.m = Tasks(self.root, self.parent)
         register(self.m, 'HARNESS_IMPROVEMENT', 'local_change_validation', 'Synthetic whole flow',
             [dict(feature_id='F',task_id='T',role='improvement',title='Synthetic',scope='src only',
@@ -202,3 +205,43 @@ class CommandRunContinuationTests(unittest.TestCase):
 
 
 del Authority, Native
+
+
+class MissingCommandRunTests(unittest.TestCase):
+    setUp = CommandRunContinuationTests.setUp
+    parent_has_log = False
+    git = CommandRunContinuationTests.git
+    question = CommandRunContinuationTests.question
+    approve = CommandRunContinuationTests.approve
+    call = CommandRunContinuationTests.call
+    entry = CommandRunContinuationTests.entry
+    structured = CommandRunContinuationTests.structured
+    reply = CommandRunContinuationTests.reply
+    write_native = CommandRunContinuationTests.write_native
+    write_code = CommandRunContinuationTests.write_code
+    command = CommandRunContinuationTests.command
+    continuation = CommandRunContinuationTests.continuation
+
+    def test_missing_log_recovers_same_active_attempt(self):
+        with self.assertRaisesRegex(ValueError, 'unknown run_id'):
+            self.command(self.parent)
+        self.logger.append('command_started', self.parent, 'HARNESS_IMPROVEMENT',
+                           task_id='QA', agent_run_id='independent-qa-attempt')
+        before = self.m.read()
+        link = self.continuation()
+        self.assertTrue(link['previous_log_missing'])
+        self.assertIsNone(link['previous_finished_event_id'])
+        self.assertEqual(self.continuation(), link)
+        self.assertEqual(self.command(link['command_run_id']), 0)
+        after = self.m.read()
+        self.assertEqual(after['required_questions'], before['required_questions'])
+        execution, = after['tasks']['T']['executions']
+        self.assertEqual(execution['attempt_id'], self.run['attempt_id'])
+        self.assertEqual(execution['run_id'], self.parent)
+        with self.assertRaisesRegex(ValueError, 'unknown run_id'):
+            self.logger.run(self.parent)
+
+    def test_partial_predecessor_log_is_not_replaced(self):
+        self.logger.append('run_finished', self.parent, 'HARNESS_IMPROVEMENT')
+        with self.assertRaisesRegex(ValueError, 'unknown run_id'):
+            self.continuation()
